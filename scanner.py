@@ -54,3 +54,19 @@ def scan():
 
 if __name__ == "__main__":
     scan()
+# Optional Telegram connection test
+if os.environ.get("TELEGRAM_TEST") == "true":
+    from alerts import send_telegram
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+    if not token or not chat_id:
+        raise RuntimeError("Telegram credentials missing")
+
+    send_telegram(
+        token,
+        chat_id,
+        "First Half Signal Lab: GitHub scanner connected!"
+    )
+    print("Telegram connection test completed")
