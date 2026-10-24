@@ -45,7 +45,12 @@ def scan():
 
             checked += 1
 
-        except Exception as error:
+            except Exception as error:
+            if "API_DAILY_RESERVE_REACHED" in str(error):
+                raise
+            if "API_MINUTE_LIMIT_NEAR" in str(error):
+                raise
+
             print("Skipped fixture", fixture_id,
                   type(error).__name__)
 
