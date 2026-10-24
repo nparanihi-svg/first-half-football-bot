@@ -1,0 +1,56 @@
+
+import os
+from datetime import datetime, timezone
+
+from provider import FootballAPI, parse_fixture
+from engine import predict
+
+
+def scan():
+    key = os.environ.get("API_FOOTBALL_KEY")
+
+    if not key:
+        raise RuntimeError("API-Football key missing")
+
+    api = FootballAPI(key)
+    fixtures = api.live()
+
+    print("Scan:", datetime.now(timezone.utc).isoformat())
+    print("Live matches:", len(fixtures))
+
+    checked = 0
+
+    for fixture in fixtures:
+        status = fixture["fixture"]["status"]["short"]
+        minute = fixture["fixture"]["status"].get("elapsed") or 0
+
+        if status != "1H" or minute >= 45:
+            continue
+
+        fixture_id = fixture["fixture"]["id"]
+
+        try:
+            stats = api.first_half_stats(fixture_id)
+            snapshot = parse_fixture(fixture, stats)
+            estimates = predict(snapshot)
+
+            for result in estimates:
+                print(
+                    snapshot.home, "vs", snapshot.away,
+                    "| Minute:", minute,
+                    "| Market:", result["label"],
+                    "| Estimate:", round(result["probability"] * 100, 1),
+                    "%",
+                )
+
+            checked += 1
+
+        except Exception as error:
+            print("Skipped fixture", fixture_id,
+                  type(error).__name__)
+
+    print("First-half matches checked:", checked)
+
+
+if __name__ == "__main__":
+    scan()
