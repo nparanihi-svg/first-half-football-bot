@@ -1,45 +1,51 @@
-import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from scanner import scan
 
 INTERVAL = 60
-MAX_SCANS_PER_DAY = 1440
-
-
+ERROR_COOLDOWN = 300
+DAILY_RESERVE_COOLDOWN = 3600
 def main():
-    scans_today = 0
-    current_day = datetime.now(timezone.utc).date()
+    next_scan = time.monotonic()
+    pause_until = None
 
     print("First Half Signal Lab worker started", flush=True)
 
     while True:
-        today = datetime.now(timezone.utc).date()
+        if pause_until:
+            if datetime.now(timezone.utc) < pause_until:
+                time.sleep(60)
+                continue
+            pause_until = None
 
-        if today != current_day:
-            current_day = today
-            scans_today = 0
+        delay = next_scan - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
-        if scans_today < MAX_SCANS_PER_DAY:
-            started = time.monotonic()
+        try:
+            scan()
 
-            try:
-                scan()
-                scans_today += 1
-            except Exception as error:
-                print(
-                    "Scan failed:",
-                    type(error).__name__,
-                    str(error),
-                    flush=True
+        except Exception as error:
+            message = str(error)
+            print("Scanner error:", message, flush=True)
+
+            if "API_DAILY_RESERVE_REACHED" in message:
+                pause_until = (
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=DAILY_RESERVE_COOLDOWN)
                 )
 
-            elapsed = time.monotonic() - started
-            time.sleep(max(1, INTERVAL - elapsed))
-        else:
-            print("Daily scan limit reached", flush=True)
-            time.sleep(60)
+            elif "API_MINUTE_LIMIT_NEAR" in message:
+                pause_until = (
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=ERROR_COOLDOWN)
+                )
+
+            else:
+                time.sleep(ERROR_COOLDOWN)
+
+        next_scan = time.monotonic() + INTERVAL
 
 
 if __name__ == "__main__":
