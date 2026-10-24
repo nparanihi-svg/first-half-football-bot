@@ -120,3 +120,22 @@ try:
     c.close()
 except sqlite3.Error as e: st.warning(str(e))
 st.caption('Do not place real bets based on these unvalidated illustrative models. Next milestones: calibrated historical inputs, odds feed approval, background worker, robust deduplication and settlement.')
+st.divider()
+st.subheader("Telegram connection test")
+
+if st.button("Send Telegram Test Message"):
+    try:
+        token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "")
+
+        if not token or not chat_id:
+            st.error("Telegram credentials are missing.")
+        else:
+            send_telegram(
+                token,
+                chat_id,
+                "Football Bot Test: Telegram connection successful!"
+            )
+            st.success("Test message sent successfully!")
+    except Exception as e:
+        st.error(f"Telegram test failed: {e}")
