@@ -19,7 +19,7 @@ def scan():
     print("Live matches:", len(fixtures))
 
     checked = 0
-
+    MAX_FIXTURES_PER_SCAN = 3
     for fixture in fixtures:
         status = fixture["fixture"]["status"]["short"]
         minute = fixture["fixture"]["status"].get("elapsed") or 0
@@ -27,7 +27,11 @@ def scan():
         if status != "1H" or minute >= 45:
             continue
 
+            if checked >= MAX_FIXTURES_PER_SCAN:
+            break
+
         fixture_id = fixture["fixture"]["id"]
+        checked += 1
 
         try:
             stats = api.first_half_stats(fixture_id)
@@ -43,7 +47,6 @@ def scan():
                     "%",
                 )
 
-            checked += 1
 
             except Exception as error:
             if "API_DAILY_RESERVE_REACHED" in str(error):
