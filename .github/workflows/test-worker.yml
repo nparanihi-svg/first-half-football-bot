@@ -1,0 +1,44 @@
+name: Test Football Worker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Download code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test worker for 75 seconds
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        shell: bash
+        run: |
+          set +e
+          timeout 75s python -u worker.py > worker-test.log 2>&1
+          result=$?
+          cat worker-test.log
+
+          if [ "$result" -ne 0 ] && [ "$result" -ne 124 ]; then
+            echo "Worker exited unexpectedly"
+            exit 1
+          fi
+
+          grep -q "worker started" worker-test.log || exit 1
+          grep -q "First-half matches checked:" worker-test.log || exit 1
+
+          echo "Worker startup and scan test passed"
