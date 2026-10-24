@@ -11,6 +11,11 @@ class FootballAPI:
         self.session.headers.update({'x-apisports-key':key})
 
     def get(self, endpoint: str, **params):
+                previous_remaining = getattr(
+            self, "_daily_remaining", None
+        )
+        if previous_remaining is not None and previous_remaining <= 1500:
+            raise RuntimeError("API_DAILY_RESERVE_REACHED")
         response = self.session.get(
             BASE + endpoint,
             params=params,
@@ -25,6 +30,7 @@ class FootballAPI:
         )
 
         if remaining is not None:
+                        self._daily_remaining = int(remaining)
             print("API daily requests remaining:", remaining)
             if int(remaining) <= 1500:
                 raise RuntimeError("API_DAILY_RESERVE_REACHED")
