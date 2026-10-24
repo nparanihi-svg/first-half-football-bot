@@ -11,13 +11,35 @@ class FootballAPI:
         self.session.headers.update({'x-apisports-key':key})
 
     def get(self, endpoint: str, **params):
-        response = self.session.get(BASE+endpoint, params=params, timeout=20)
+        response = self.session.get(
+            BASE + endpoint,
+            params=params,
+            timeout=20
+        )
+
+        remaining = response.headers.get(
+            "x-ratelimit-requests-remaining"
+        )
+        minute_remaining = response.headers.get(
+            "X-RateLimit-Remaining"
+        )
+
+        if remaining is not None:
+            print("API daily requests remaining:", remaining)
+            if int(remaining) <= 1500:
+                raise RuntimeError("API_DAILY_RESERVE_REACHED")
+
+        if minute_remaining is not None:
+            if int(minute_remaining) <= 1:
+                raise RuntimeError("API_MINUTE_LIMIT_NEAR")
+
         response.raise_for_status()
         data = response.json()
-        if data.get('errors'):
-            raise RuntimeError(f"API errors: {data['errors']}")
-        return data.get('response', [])
 
+        if data.get("errors"):
+            raise RuntimeError(f"API errors: {data['errors']}")
+
+        return data.get("response", [])
     def live(self):
         return self.get('/fixtures', live='all')
 
