@@ -27,7 +27,7 @@ def scan():
         if status != "1H" or minute >= 45:
             continue
 
-            if checked >= MAX_FIXTURES_PER_SCAN:
+        if checked >= MAX_FIXTURES_PER_SCAN:
             break
 
         fixture_id = fixture["fixture"]["id"]
@@ -35,6 +35,7 @@ def scan():
 
         try:
             stats = api.first_half_stats(fixture_id)
+
             snapshot = parse_fixture(fixture, stats)
             estimates = predict(snapshot)
 
