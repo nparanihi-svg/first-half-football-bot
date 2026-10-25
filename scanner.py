@@ -6,6 +6,7 @@ from provider import FootballAPI, parse_fixture
 from engine import predict
 from signal_rules import watchlist_reason
 from tracking_v3 import record, verify_one
+from results_v4 import deliver_result_notices
 
 MAX_FIXTURES_PER_SCAN = 3
 STATE_DB = os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3')
@@ -122,6 +123,12 @@ def scan():
                 'API_MINUTE_LIMIT_NEAR' in str(error)):
             raise
         print('V3 outcome check deferred:', type(error).__name__, str(error)[:140], flush=True)
+    # Deliver settlement notifications separately from fixture processing.
+    # Failure here must not stop scanning.
+    try:
+        deliver_result_notices()
+    except Exception as error:
+        print('V4 result notification check:', type(error).__name__, str(error)[:140], flush=True)
 
 
 if __name__ == '__main__':
