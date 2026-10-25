@@ -9,6 +9,42 @@ from tracking_v3 import record, verify_one
 from results_v4 import deliver_result_notices
 
 MAX_FIXTURES_PER_SCAN = 3
+# Rotate the eligible fixture list every scan. This increases coverage without
+# raising the existing three-statistics-requests-per-scan limit.
+_scan_number = 0
+
+
+def eligible_fixtures(fixtures):
+    """Only first-half fixtures; rotate to avoid repeatedly checking the first three."""
+    global _scan_number
+    eligible = [f for f in fixtures if
+                f.get('fixture', {}).get('status', {}).get('short') == '1H'
+                and (f.get('fixture', {}).get('status', {}).get('elapsed') or 0) < 45]
+    if not eligible:
+        return []
+    eligible.sort(key=lambda f: f['fixture']['id'])
+    start = (_scan_number * MAX_FIXTURES_PER_SCAN) % len(eligible)
+    _scan_number += 1
+    return [eligible[(start + i) % len(eligible)]
+            for i in range(min(MAX_FIXTURES_PER_SCAN, len(eligible)))]
+
+
+def signal_data_issue(snapshot, market):
+    """No Telegram research alert without observed first-half attacking activity."""
+    if snapshot.total_shots is None or snapshot.shots_on_goal is None:
+        return 'missing live shots / shots on target'
+    if snapshot.total_shots < 0 or snapshot.shots_on_goal < 0:
+        return 'invalid negative shot counts'
+    if snapshot.shots_on_goal > snapshot.total_shots:
+        return 'shots on target exceed total shots'
+    if market == 'FH_OVER_2_5_CORNERS':
+        if snapshot.half_corners is None:
+            return 'first-half corners unavailable'
+        if snapshot.half_corners >= 3:
+            return 'corner target already reached'
+    if market == 'FH_OVER_0_5_GOALS' and snapshot.half_goals >= 1:
+        return 'goal target already reached'
+    return None
 STATE_DB = os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3')
 
 
@@ -62,8 +98,10 @@ def scan():
     fixtures = api.live()
     print('Scan:', datetime.now(timezone.utc).isoformat(), flush=True)
     print('Live matches:', len(fixtures), flush=True)
+    selected = eligible_fixtures(fixtures)
+    print('V5 eligible rotation: selected', len(selected), 'fixtures', flush=True)
     checked = 0
-    for fixture in fixtures:
+    for fixture in selected:
         status = fixture.get('fixture', {}).get('status', {})
         minute = status.get('elapsed') or 0
         if status.get('short') != '1H' or minute >= 45:
@@ -82,6 +120,10 @@ def scan():
                       '| Minute:', minute, '| Market:', result['label'],
                       '| Estimate:', round(probability * 100, 1), '%', flush=True)
                 print('MODEL EXPLANATION:', _explanation(snapshot, result).replace('\n', ' | '), flush=True)
+                issue = signal_data_issue(snapshot, result['market'])
+                if issue:
+                    print('V5 ALERT FILTER:', fixture_id, result['market'], issue, flush=True)
+                    continue
                 reason = watchlist_reason(snapshot, result['market'])
                 if reason is None:
                     continue
