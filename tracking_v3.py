@@ -5,7 +5,7 @@ or first-half corner statistic becomes available.
 """
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 DB_PATH = Path(os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3'))
@@ -45,17 +45,54 @@ def record(snapshot, result):
            'experimental model; not calibrated; no bookmaker odds'))
 
 
-def _candidates():
-    # One fixture per scan; prefer those not checked recently.
+def _candidates(live_fixtures):
+    """Prioritize verified half-time statuses; defer early first-half fixtures.
+
+    Unknown/off-feed fixtures become eligible after an estimated half-time
+    based on first recorded match minute, with a stoppage-time grace period.
+    Existing checks table and three-minute retry cooldown are preserved.
+    """
+    status_by_id = {
+        f['fixture']['id']: f.get('fixture', {}).get('status', {}).get('short')
+        for f in live_fixtures if f.get('fixture', {}).get('id') is not None
+    }
+    completed = {'HT', '2H', 'ET', 'P', 'FT', 'AET', 'PEN'}
+    now = datetime.now(timezone.utc)
     with _connect() as db:
-        return db.execute("""SELECT o.fixture_id FROM observations o
-          LEFT JOIN checks c ON c.fixture_id=o.fixture_id
-          WHERE o.result='PENDING'
-            AND (c.last_checked_at IS NULL OR
-                 julianday(c.last_checked_at) < julianday('now','-3 minutes'))
-          GROUP BY o.fixture_id
-          ORDER BY COALESCE(MAX(c.last_checked_at), '1970-01-01'), MIN(o.recorded_at)
-          LIMIT 1""").fetchall()
+        rows = db.execute("""SELECT o.fixture_id, MIN(o.recorded_at),
+          MIN(o.minute), MAX(c.last_checked_at)
+          FROM observations o LEFT JOIN checks c ON c.fixture_id=o.fixture_id
+          WHERE o.result='PENDING' GROUP BY o.fixture_id
+          ORDER BY COALESCE(MAX(c.last_checked_at),'1970-01-01'),
+                   MIN(o.recorded_at) LIMIT 200""").fetchall()
+    due = []
+    for fixture_id, first_time, first_minute, last_checked in rows:
+        if last_checked:
+            try:
+                checked_at = datetime.fromisoformat(last_checked)
+                if checked_at.tzinfo is None:
+                    checked_at = checked_at.replace(tzinfo=timezone.utc)
+                if now - checked_at < timedelta(minutes=3):
+                    continue
+            except ValueError:
+                pass
+        status = status_by_id.get(fixture_id)
+        if status in completed:
+            due.append((0, first_time, fixture_id))
+            continue
+        if status in {'1H', 'NS'}:
+            continue
+        try:
+            recorded = datetime.fromisoformat(first_time)
+            if recorded.tzinfo is None:
+                recorded = recorded.replace(tzinfo=timezone.utc)
+            estimated_ready = recorded + timedelta(minutes=max(0, 48 - int(first_minute or 0)))
+        except (ValueError, TypeError):
+            continue
+        if now >= estimated_ready:
+            due.append((1, first_time, fixture_id))
+    due.sort()
+    return [(due[0][2],)] if due else []
 
 
 def verify_one(api, live_fixtures):
@@ -63,7 +100,7 @@ def verify_one(api, live_fixtures):
     completed = {'HT', '2H', 'ET', 'P', 'FT', 'AET', 'PEN'}
     known = {f['fixture']['id']: f for f in live_fixtures
              if f.get('fixture', {}).get('status', {}).get('short') in completed}
-    for (fixture_id,) in _candidates():
+    for (fixture_id,) in _candidates(live_fixtures):
         fixture = known.get(fixture_id)
         try:
             if fixture is None:
@@ -97,7 +134,7 @@ def verify_one(api, live_fixtures):
             if corner_pending:
                 try:
                     from provider import _stat_map
-                    totals, _ = _stat_map(api.first_half_stats(fixture_id))
+                    totals, _ = _stat_map(api.first_half_stats(fixture_id, fresh=True))
                     corner_value = totals.get('Corner Kicks')
                     corners = int(corner_value) if corner_value is not None else None
                     if corners is not None:
@@ -111,7 +148,8 @@ def verify_one(api, live_fixtures):
                         print('V3 check:', fixture_id, 'corners unavailable', flush=True)
                 except Exception as error:
                     if ('API_DAILY_RESERVE_REACHED' in str(error) or
-                            'API_MINUTE_LIMIT_NEAR' in str(error)):
+                            'API_MINUTE_LIMIT_NEAR' in str(error) or
+                            'API_LOCAL_BUDGET_EXHAUSTED' in str(error)):
                         raise
                     print('V3 corners check deferred:', fixture_id,
                           type(error).__name__, str(error)[:120], flush=True)

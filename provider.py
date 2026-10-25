@@ -2,25 +2,40 @@
 import os
 import time
 import requests
+from collections import deque, Counter
 from engine import Snapshot
 
 BASE = 'https://v3.football.api-sports.io'
 # Shared across FootballAPI instances created by scanner.scan() in a single worker.
 _STAT_CACHE = {}
+_REQUEST_TIMES = deque()  # shared local rolling-minute budget across scanner scans
 
 def _cache_ttl():
-    return max(0, int(os.getenv('STATS_CACHE_SECONDS', '45')))
+    return max(0, int(os.getenv('STATS_CACHE_SECONDS', '60')))
 
 class FootballAPI:
     def __init__(self, key: str):
         self.session = requests.Session()
         self.session.headers.update({'x-apisports-key': key})
         self._daily_remaining = None
+        self._counts = Counter()
 
     def get(self, endpoint: str, **params):
         reserve = max(0, int(os.getenv('API_DAILY_RESERVE', '5000')))
         if self._daily_remaining is not None and self._daily_remaining <= reserve:
             raise RuntimeError('API_DAILY_RESERVE_REACHED')
+        # Conservative local budget (~57,600/day at 40/min if sustained).
+        now = time.monotonic()
+        while _REQUEST_TIMES and now - _REQUEST_TIMES[0] >= 60:
+            _REQUEST_TIMES.popleft()
+        limit = max(5, min(200, int(os.getenv('API_LOCAL_REQUESTS_PER_MINUTE', '40'))))
+        if len(_REQUEST_TIMES) >= limit:
+            raise RuntimeError('API_LOCAL_BUDGET_EXHAUSTED')
+        _REQUEST_TIMES.append(now)
+        category = ('statistics' if endpoint == '/fixtures/statistics'
+                    else 'live' if endpoint == '/fixtures' and params.get('live') == 'all'
+                    else 'settlement_or_other')
+        self._counts[category] += 1
         response = self.session.get(BASE + endpoint, params=params, timeout=20)
         remaining = response.headers.get('x-ratelimit-requests-remaining')
         minute_remaining = response.headers.get('X-RateLimit-Remaining')
@@ -37,18 +52,22 @@ class FootballAPI:
             raise RuntimeError(f"API errors: {data['errors']}")
         return data.get('response', [])
 
+    def request_summary(self):
+        return dict(self._counts)
+
     def live(self):
         return self.get('/fixtures', live='all')
 
     def upcoming(self, date: str):
         return self.get('/fixtures', date=date, status='NS')
 
-    def first_half_stats(self, fixture_id: int):
+    def first_half_stats(self, fixture_id: int, fresh=False):
         ttl = _cache_ttl()
         now = time.monotonic()
         key = int(fixture_id)
         saved = _STAT_CACHE.get(key)
-        if ttl and saved and now - saved[0] < ttl:
+        if not fresh and ttl and saved and now - saved[0] < ttl:
+            self._counts['stats_cache_hits'] += 1
             return saved[1]
         stats = self.get('/fixtures/statistics', fixture=fixture_id, half='true')
         if ttl:

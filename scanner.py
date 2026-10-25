@@ -8,7 +8,7 @@ from signal_rules import watchlist_reason
 from tracking_v3 import record, verify_one
 from results_v4 import deliver_result_notices
 
-MAX_FIXTURES_PER_SCAN = max(1, min(20, int(os.getenv('MAX_FIXTURES_PER_SCAN', '10'))))
+MAX_FIXTURES_PER_SCAN = max(1, min(30, int(os.getenv('MAX_FIXTURES_PER_SCAN', '20'))))
 _scan_number = 0
 
 def eligible_fixtures(fixtures):
@@ -85,11 +85,17 @@ def scan():
     if not key:
         raise RuntimeError('API-Football key missing')
     api = FootballAPI(key)
-    fixtures = api.live()
+    try:
+        fixtures = api.live()
+    except RuntimeError as error:
+        if 'API_LOCAL_BUDGET_EXHAUSTED' not in str(error):
+            raise
+        print('V5.2 local API budget reached; live scan deferred', flush=True)
+        return
     print('Scan:', datetime.now(timezone.utc).isoformat(), flush=True)
     print('Live matches:', len(fixtures), flush=True)
     selected = eligible_fixtures(fixtures)
-    print('V5.1 eligible rotation: selected', len(selected), 'fixtures', flush=True)
+    print('V5.2 eligible rotation: selected', len(selected), 'fixtures', flush=True)
     checked = 0
     for fixture in selected:
         status = fixture.get('fixture', {}).get('status', {})
@@ -140,6 +146,9 @@ def scan():
                     release_alert(fixture_id, result['market'])
                     raise
         except Exception as error:
+            if 'API_LOCAL_BUDGET_EXHAUSTED' in str(error):
+                print('V5.2 local request budget reached; remaining fixture scans deferred', flush=True)
+                break
             if ('API_DAILY_RESERVE_REACHED' in str(error)
                     or 'API_MINUTE_LIMIT_NEAR' in str(error)):
                 raise
@@ -148,7 +157,8 @@ def scan():
     try:
         verify_one(api, fixtures)
     except Exception as error:
-        if ('API_DAILY_RESERVE_REACHED' in str(error) or
+        if ('API_LOCAL_BUDGET_EXHAUSTED' in str(error) or
+                'API_DAILY_RESERVE_REACHED' in str(error) or
                 'API_MINUTE_LIMIT_NEAR' in str(error)):
             raise
         print('V3 outcome check deferred:', type(error).__name__, str(error)[:140], flush=True)
@@ -156,6 +166,8 @@ def scan():
         deliver_result_notices()
     except Exception as error:
         print('V4 result notification check:', type(error).__name__, str(error)[:140], flush=True)
+
+    print('V5.2 API metrics:', api.request_summary(), flush=True)
 
 if __name__ == '__main__':
     scan()
