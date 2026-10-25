@@ -5,9 +5,10 @@ from datetime import datetime, timezone
 from provider import FootballAPI, parse_fixture
 from engine import predict
 from signal_rules import watchlist_reason
+from tracking_v3 import record, verify_one
 
 MAX_FIXTURES_PER_SCAN = 3
-STATE_DB = os.getenv('SIGNAL_DB_PATH', '/tmp/first_half_signals.sqlite3')
+STATE_DB = os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3')
 
 
 def claim_alert(fixture_id, market):
@@ -74,6 +75,7 @@ def scan():
             stats = api.first_half_stats(fixture_id)
             snapshot = parse_fixture(fixture, stats)
             for result in predict(snapshot):
+                record(snapshot, result)
                 probability = result['probability']
                 print(snapshot.home, 'vs', snapshot.away,
                       '| Minute:', minute, '| Market:', result['label'],
@@ -113,6 +115,13 @@ def scan():
             print('Skipped fixture', fixture_id, type(error).__name__,
                   str(error)[:160], flush=True)
     print('First-half matches checked:', checked, flush=True)
+    try:
+        verify_one(api, fixtures)
+    except Exception as error:
+        if ('API_DAILY_RESERVE_REACHED' in str(error) or
+                'API_MINUTE_LIMIT_NEAR' in str(error)):
+            raise
+        print('V3 outcome check deferred:', type(error).__name__, str(error)[:140], flush=True)
 
 
 if __name__ == '__main__':
