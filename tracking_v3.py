@@ -46,59 +46,82 @@ def record(snapshot, result):
 
 
 def _candidates():
-    # Keep API usage bounded: process only one due fixture per scan.
+    # One fixture per scan; prefer those not checked recently.
     with _connect() as db:
-        return db.execute('''SELECT o.fixture_id FROM observations o
+        return db.execute("""SELECT o.fixture_id FROM observations o
           LEFT JOIN checks c ON c.fixture_id=o.fixture_id
-          WHERE o.result='PENDING' AND
-           (c.last_checked_at IS NULL OR julianday(c.last_checked_at) < julianday('now','-10 minutes'))
-          GROUP BY o.fixture_id ORDER BY MIN(o.recorded_at) LIMIT 1''').fetchall()
+          WHERE o.result='PENDING'
+            AND (c.last_checked_at IS NULL OR
+                 julianday(c.last_checked_at) < julianday('now','-3 minutes'))
+          GROUP BY o.fixture_id
+          ORDER BY COALESCE(MAX(c.last_checked_at), '1970-01-01'), MIN(o.recorded_at)
+          LIMIT 1""").fetchall()
 
 
 def verify_one(api, live_fixtures):
-    """Attempt settlement for one match per scan; never guess unavailable data."""
-    ready = {f['fixture']['id']:f for f in live_fixtures
-             if f.get('fixture', {}).get('status', {}).get('short') in
-             ('HT','2H','ET','P','FT','AET','PEN')}
+    """Check one due fixture. Settle goal and corner markets independently."""
+    completed = {'HT', '2H', 'ET', 'P', 'FT', 'AET', 'PEN'}
+    known = {f['fixture']['id']: f for f in live_fixtures
+             if f.get('fixture', {}).get('status', {}).get('short') in completed}
     for (fixture_id,) in _candidates():
-        fixture = ready.get(fixture_id)
-        with _connect() as db:
-            db.execute('INSERT OR REPLACE INTO checks VALUES (?,?)',
-                       (fixture_id, _now()))
-        if fixture is None:
-            # Extra fixture request used only for an eligible, previously saved match.
-            response = api.get('/fixtures', id=fixture_id)
-            if not response:
+        fixture = known.get(fixture_id)
+        try:
+            if fixture is None:
+                response = api.get('/fixtures', id=fixture_id)
+                fixture = response[0] if response else None
+            if fixture is None:
+                print('V3 check:', fixture_id, 'fixture data unavailable', flush=True)
                 return
-            fixture = response[0]
-        status = fixture.get('fixture', {}).get('status', {}).get('short')
-        if status not in ('HT','2H','ET','P','FT','AET','PEN'):
-            return
-        scores = (fixture.get('score') or {}).get('halftime') or {}
-        h, a = scores.get('home'), scores.get('away')
-        half_goals = h + a if isinstance(h,int) and isinstance(a,int) else None
-        with _connect() as db:
-            need_corners = db.execute('''SELECT 1 FROM observations WHERE
-                 fixture_id=? AND market='FH_OVER_2_5_CORNERS' AND result='PENDING' LIMIT 1''',
-                 (fixture_id,)).fetchone() is not None
-        corners = None
-        if need_corners:
-            # The half=true parameter is the provider's original first-half stats route.
-            from provider import _stat_map
-            totals, _ = _stat_map(api.first_half_stats(fixture_id))
-            if 'Corner Kicks' in totals:
-                corners = int(totals['Corner Kicks'])
-        with _connect() as db:
-            if half_goals is not None:
-                db.execute('''UPDATE observations SET result=?, settled_at=? WHERE
-                   fixture_id=? AND market='FH_OVER_0_5_GOALS' AND result='PENDING' ''',
-                   ('WIN' if half_goals >= 1 else 'LOSS',_now(),fixture_id))
-            if corners is not None:
-                db.execute('''UPDATE observations SET result=?, settled_at=? WHERE
-                   fixture_id=? AND market='FH_OVER_2_5_CORNERS' AND result='PENDING' ''',
-                   ('WIN' if corners >= 3 else 'LOSS',_now(),fixture_id))
-        print('V3 outcome check:',fixture_id,'goals:',half_goals,
-              'corners:',corners,'(None means unverified)',flush=True)
+            status = fixture.get('fixture', {}).get('status', {}).get('short')
+            if status not in completed:
+                print('V3 check:', fixture_id, 'status:', status,
+                      'awaiting completed first half', flush=True)
+                return
+            scores = (fixture.get('score') or {}).get('halftime') or {}
+            home, away = scores.get('home'), scores.get('away')
+            goals = (home + away if type(home) is int and type(away) is int else None)
+            with _connect() as db:
+                goal_pending = db.execute("""SELECT 1 FROM observations WHERE
+                    fixture_id=? AND market='FH_OVER_0_5_GOALS' AND result='PENDING' LIMIT 1""",
+                    (fixture_id,)).fetchone() is not None
+                corner_pending = db.execute("""SELECT 1 FROM observations WHERE
+                    fixture_id=? AND market='FH_OVER_2_5_CORNERS' AND result='PENDING' LIMIT 1""",
+                    (fixture_id,)).fetchone() is not None
+                if goal_pending and goals is not None:
+                    cur = db.execute("""UPDATE observations SET result=?, settled_at=? WHERE
+                        fixture_id=? AND market='FH_OVER_0_5_GOALS' AND result='PENDING'""",
+                        ('WIN' if goals >= 1 else 'LOSS', _now(), fixture_id))
+                    print('V3 GOALS settled:', fixture_id, 'goals:', goals,
+                          'records:', cur.rowcount, flush=True)
+            # Do not let unavailable corners prevent a verified goal settlement.
+            if corner_pending:
+                try:
+                    from provider import _stat_map
+                    totals, _ = _stat_map(api.first_half_stats(fixture_id))
+                    corner_value = totals.get('Corner Kicks')
+                    corners = int(corner_value) if corner_value is not None else None
+                    if corners is not None:
+                        with _connect() as db:
+                            cur = db.execute("""UPDATE observations SET result=?, settled_at=? WHERE
+                                fixture_id=? AND market='FH_OVER_2_5_CORNERS' AND result='PENDING'""",
+                                ('WIN' if corners >= 3 else 'LOSS', _now(), fixture_id))
+                        print('V3 CORNERS settled:', fixture_id, 'corners:', corners,
+                              'records:', cur.rowcount, flush=True)
+                    else:
+                        print('V3 check:', fixture_id, 'corners unavailable', flush=True)
+                except Exception as error:
+                    if ('API_DAILY_RESERVE_REACHED' in str(error) or
+                            'API_MINUTE_LIMIT_NEAR' in str(error)):
+                        raise
+                    print('V3 corners check deferred:', fixture_id,
+                          type(error).__name__, str(error)[:120], flush=True)
+            if goal_pending and goals is None:
+                print('V3 check:', fixture_id, 'halftime goal score unavailable', flush=True)
+        finally:
+            # Timestamp the attempt even on errors, preventing rapid retries.
+            with _connect() as db:
+                db.execute('INSERT OR REPLACE INTO checks VALUES (?,?)',
+                           (fixture_id, _now()))
         return
 
 
