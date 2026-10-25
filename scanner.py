@@ -1,12 +1,7 @@
-"""Minute-by-minute first-half research watchlist with Telegram notifications.
-
-Replaces scanner.py. Uses existing provider.py, engine.py and alerts.py.
-Alerts are exploratory signals, not validated betting recommendations.
-"""
+"""Live first-half research scanner with explainable, uncalibrated signals."""
 import os
 import sqlite3
 from datetime import datetime, timezone
-
 from provider import FootballAPI, parse_fixture
 from engine import predict
 from signal_rules import watchlist_reason
@@ -16,16 +11,11 @@ STATE_DB = os.getenv('SIGNAL_DB_PATH', '/tmp/first_half_signals.sqlite3')
 
 
 def claim_alert(fixture_id, market):
-    """Claim each match/market once using SQLite unique key.
-
-    Note: Render's default /tmp storage is ephemeral; a restart can resend alerts.
-    For durable deduplication, connect persistent storage before production.
-    """
+    # Render's default /tmp is ephemeral; restart may resend previous alerts.
     with sqlite3.connect(STATE_DB, timeout=10) as db:
         db.execute('CREATE TABLE IF NOT EXISTS sent_alerts ('
                    'fixture_id INTEGER NOT NULL, market TEXT NOT NULL, '
-                   'created_at TEXT NOT NULL, '
-                   'PRIMARY KEY(fixture_id, market))')
+                   'created_at TEXT NOT NULL, PRIMARY KEY(fixture_id, market))')
         try:
             db.execute('INSERT INTO sent_alerts VALUES (?, ?, ?)',
                        (fixture_id, market, datetime.now(timezone.utc).isoformat()))
@@ -40,15 +30,36 @@ def release_alert(fixture_id, market):
                    (fixture_id, market))
 
 
+def _fmt(value, suffix=''):
+    return 'unavailable' if value is None else f'{value:g}{suffix}'
+
+
+def _explanation(snapshot, result):
+    base = result['baseline_probability'] * 100
+    new = result['probability'] * 100
+    return (
+        f'Time left (regulation): {result["minutes_remaining"]:.0f} min + possible stoppage\n'
+        f'Goals this half: {snapshot.half_goals}; corners: {_fmt(snapshot.half_corners)}\n'
+        f'Shots: {_fmt(snapshot.total_shots)}; on target: {_fmt(snapshot.shots_on_goal)}; '
+        f'blocked: {_fmt(snapshot.blocked_shots)}\n'
+        f'Possession (team order as listed): {_fmt(snapshot.possession_home, "%")} / '
+        f'{_fmt(snapshot.possession_away, "%")}\n'
+        f'Time-only baseline: {base:.1f}%\n'
+        f'Experimental live adjustment: {new-base:+.1f} percentage points '
+        f'(multiplier {result["intensity_multiplier"]:.2f})\n'
+        f'Inputs affecting estimate: {", ".join(result["inputs_used"]) or "none"}. '
+        'Possession is shown for context, not yet a probability input.'
+    )
+
+
 def scan():
-    key = os.environ.get('API_FOOTBALL_KEY')
+    key = os.getenv('API_FOOTBALL_KEY')
     if not key:
         raise RuntimeError('API-Football key missing')
     api = FootballAPI(key)
     fixtures = api.live()
     print('Scan:', datetime.now(timezone.utc).isoformat(), flush=True)
     print('Live matches:', len(fixtures), flush=True)
-
     checked = 0
     for fixture in fixtures:
         status = fixture.get('fixture', {}).get('status', {})
@@ -62,20 +73,19 @@ def scan():
         try:
             stats = api.first_half_stats(fixture_id)
             snapshot = parse_fixture(fixture, stats)
-            estimates = predict(snapshot)
-            for result in estimates:
+            for result in predict(snapshot):
                 probability = result['probability']
                 print(snapshot.home, 'vs', snapshot.away,
                       '| Minute:', minute, '| Market:', result['label'],
                       '| Estimate:', round(probability * 100, 1), '%', flush=True)
+                print('MODEL EXPLANATION:', _explanation(snapshot, result).replace('\n', ' | '), flush=True)
                 reason = watchlist_reason(snapshot, result['market'])
                 if reason is None:
                     continue
                 print('RESEARCH WATCHLIST:', result['label'], '-', reason, flush=True)
                 if os.getenv('ENABLE_RESEARCH_ALERTS', 'false').lower() != 'true':
                     continue
-                token = os.getenv('TELEGRAM_BOT_TOKEN', '')
-                chat_id = os.getenv('TELEGRAM_CHAT_ID', '')
+                token, chat_id = os.getenv('TELEGRAM_BOT_TOKEN', ''), os.getenv('TELEGRAM_CHAT_ID', '')
                 if not token or not chat_id:
                     print('Telegram credentials missing: research alert skipped', flush=True)
                     continue
@@ -84,12 +94,11 @@ def scan():
                 from alerts import send_telegram
                 message = (
                     'IN-PLAY RESEARCH WATCHLIST (not a bet recommendation)\n'
-                    f'{snapshot.home} vs {snapshot.away}\n'
-                    f'League: {snapshot.league}\n'
-                    f'Minute: {minute}\n'
-                    f'Market: {result["label"]}\n'
+                    f'{snapshot.home} vs {snapshot.away}\nLeague: {snapshot.league}\n'
+                    f'Minute: {minute}\nMarket: {result["label"]}\n'
                     f'Experimental estimate: {probability * 100:.1f}%\n'
-                    f'Live observations: {reason}\n'
+                    f'Watchlist trigger: {reason}\n\n'
+                    f'{_explanation(snapshot, result)}\n\n'
                     'No bookmaker odds verified. Model not calibrated.'
                 )
                 try:
@@ -110,6 +119,5 @@ if __name__ == '__main__':
     scan()
     if os.getenv('TELEGRAM_TEST') == 'true':
         from alerts import send_telegram
-        send_telegram(os.environ['TELEGRAM_BOT_TOKEN'],
-                      os.environ['TELEGRAM_CHAT_ID'],
+        send_telegram(os.environ['TELEGRAM_BOT_TOKEN'], os.environ['TELEGRAM_CHAT_ID'],
                       'First Half Signal Lab: GitHub scanner connected!')
