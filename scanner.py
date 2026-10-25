@@ -8,14 +8,11 @@ from signal_rules import watchlist_reason
 from tracking_v3 import record, verify_one
 from results_v4 import deliver_result_notices
 
-MAX_FIXTURES_PER_SCAN = 3
-# Rotate the eligible fixture list every scan. This increases coverage without
-# raising the existing three-statistics-requests-per-scan limit.
+MAX_FIXTURES_PER_SCAN = max(1, min(20, int(os.getenv('MAX_FIXTURES_PER_SCAN', '10'))))
 _scan_number = 0
 
-
 def eligible_fixtures(fixtures):
-    """Only first-half fixtures; rotate to avoid repeatedly checking the first three."""
+    """Rotate through first-half fixtures to maximise coverage."""
     global _scan_number
     eligible = [f for f in fixtures if
                 f.get('fixture', {}).get('status', {}).get('short') == '1H'
@@ -28,9 +25,7 @@ def eligible_fixtures(fixtures):
     return [eligible[(start + i) % len(eligible)]
             for i in range(min(MAX_FIXTURES_PER_SCAN, len(eligible)))]
 
-
 def signal_data_issue(snapshot, market):
-    """No Telegram research alert without observed first-half attacking activity."""
     if snapshot.total_shots is None or snapshot.shots_on_goal is None:
         return 'missing live shots / shots on target'
     if snapshot.total_shots < 0 or snapshot.shots_on_goal < 0:
@@ -45,11 +40,10 @@ def signal_data_issue(snapshot, market):
     if market == 'FH_OVER_0_5_GOALS' and snapshot.half_goals >= 1:
         return 'goal target already reached'
     return None
+
 STATE_DB = os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3')
 
-
 def claim_alert(fixture_id, market):
-    # Render's default /tmp is ephemeral; restart may resend previous alerts.
     with sqlite3.connect(STATE_DB, timeout=10) as db:
         db.execute('CREATE TABLE IF NOT EXISTS sent_alerts ('
                    'fixture_id INTEGER NOT NULL, market TEXT NOT NULL, '
@@ -61,16 +55,13 @@ def claim_alert(fixture_id, market):
         except sqlite3.IntegrityError:
             return False
 
-
 def release_alert(fixture_id, market):
     with sqlite3.connect(STATE_DB) as db:
         db.execute('DELETE FROM sent_alerts WHERE fixture_id=? AND market=?',
                    (fixture_id, market))
 
-
 def _fmt(value, suffix=''):
     return 'unavailable' if value is None else f'{value:g}{suffix}'
-
 
 def _explanation(snapshot, result):
     base = result['baseline_probability'] * 100
@@ -89,7 +80,6 @@ def _explanation(snapshot, result):
         'Possession is shown for context, not yet a probability input.'
     )
 
-
 def scan():
     key = os.getenv('API_FOOTBALL_KEY')
     if not key:
@@ -99,15 +89,13 @@ def scan():
     print('Scan:', datetime.now(timezone.utc).isoformat(), flush=True)
     print('Live matches:', len(fixtures), flush=True)
     selected = eligible_fixtures(fixtures)
-    print('V5 eligible rotation: selected', len(selected), 'fixtures', flush=True)
+    print('V5.1 eligible rotation: selected', len(selected), 'fixtures', flush=True)
     checked = 0
     for fixture in selected:
         status = fixture.get('fixture', {}).get('status', {})
         minute = status.get('elapsed') or 0
         if status.get('short') != '1H' or minute >= 45:
             continue
-        if checked >= MAX_FIXTURES_PER_SCAN:
-            break
         fixture_id = fixture['fixture']['id']
         checked += 1
         try:
@@ -155,8 +143,7 @@ def scan():
             if ('API_DAILY_RESERVE_REACHED' in str(error)
                     or 'API_MINUTE_LIMIT_NEAR' in str(error)):
                 raise
-            print('Skipped fixture', fixture_id, type(error).__name__,
-                  str(error)[:160], flush=True)
+            print('Skipped fixture', fixture_id, type(error).__name__, str(error)[:160], flush=True)
     print('First-half matches checked:', checked, flush=True)
     try:
         verify_one(api, fixtures)
@@ -165,13 +152,10 @@ def scan():
                 'API_MINUTE_LIMIT_NEAR' in str(error)):
             raise
         print('V3 outcome check deferred:', type(error).__name__, str(error)[:140], flush=True)
-    # Deliver settlement notifications separately from fixture processing.
-    # Failure here must not stop scanning.
     try:
         deliver_result_notices()
     except Exception as error:
         print('V4 result notification check:', type(error).__name__, str(error)[:140], flush=True)
-
 
 if __name__ == '__main__':
     scan()

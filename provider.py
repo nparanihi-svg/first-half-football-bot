@@ -1,8 +1,15 @@
-"""API-Football v3 adapter. Keep quota protections and missing-data handling."""
+"""API-Football v3 adapter with configurable quota reserve and live-stat TTL."""
+import os
+import time
 import requests
 from engine import Snapshot
 
 BASE = 'https://v3.football.api-sports.io'
+# Shared across FootballAPI instances created by scanner.scan() in a single worker.
+_STAT_CACHE = {}
+
+def _cache_ttl():
+    return max(0, int(os.getenv('STATS_CACHE_SECONDS', '45')))
 
 class FootballAPI:
     def __init__(self, key: str):
@@ -11,7 +18,8 @@ class FootballAPI:
         self._daily_remaining = None
 
     def get(self, endpoint: str, **params):
-        if self._daily_remaining is not None and self._daily_remaining <= 1500:
+        reserve = max(0, int(os.getenv('API_DAILY_RESERVE', '5000')))
+        if self._daily_remaining is not None and self._daily_remaining <= reserve:
             raise RuntimeError('API_DAILY_RESERVE_REACHED')
         response = self.session.get(BASE + endpoint, params=params, timeout=20)
         remaining = response.headers.get('x-ratelimit-requests-remaining')
@@ -19,7 +27,7 @@ class FootballAPI:
         if remaining is not None:
             self._daily_remaining = int(remaining)
             print('API daily requests remaining:', self._daily_remaining, flush=True)
-            if self._daily_remaining <= 1500:
+            if self._daily_remaining <= reserve:
                 raise RuntimeError('API_DAILY_RESERVE_REACHED')
         if minute_remaining is not None and int(minute_remaining) <= 1:
             raise RuntimeError('API_MINUTE_LIMIT_NEAR')
@@ -36,7 +44,21 @@ class FootballAPI:
         return self.get('/fixtures', date=date, status='NS')
 
     def first_half_stats(self, fixture_id: int):
-        return self.get('/fixtures/statistics', fixture=fixture_id, half='true')
+        ttl = _cache_ttl()
+        now = time.monotonic()
+        key = int(fixture_id)
+        saved = _STAT_CACHE.get(key)
+        if ttl and saved and now - saved[0] < ttl:
+            return saved[1]
+        stats = self.get('/fixtures/statistics', fixture=fixture_id, half='true')
+        if ttl:
+            _STAT_CACHE[key] = (time.monotonic(), stats)
+        if len(_STAT_CACHE) > 500:
+            cutoff = time.monotonic() - max(ttl, 60) * 2
+            for old_id, (when, _) in list(_STAT_CACHE.items()):
+                if when < cutoff:
+                    _STAT_CACHE.pop(old_id, None)
+        return stats
 
     def prior_fixture_goals(self, team_id: int, last=12):
         fixtures = self.get('/fixtures', team=team_id, last=last)
@@ -47,7 +69,6 @@ class FootballAPI:
                 out.append(half['home'] + half['away'])
         return out
 
-
 def _number(value):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
@@ -57,7 +78,6 @@ def _number(value):
         except ValueError:
             return None
     return None
-
 
 def _stat_map(teams):
     totals = {}
@@ -74,7 +94,6 @@ def _stat_map(teams):
                 totals[name] = totals.get(name, 0) + val
         team_stats.append(current)
     return totals, team_stats
-
 
 def parse_fixture(fixture, stats=None, goal_rate=1.15, corner_rate=4.5):
     f = fixture.get('fixture', {})
