@@ -19,6 +19,33 @@ def _connect():
     return con
 
 
+
+def _notified_tally(db, current_fixture_id, current_market, current_outcome):
+    """Count unique, already-notified fixture/markets plus this pending notice.
+
+    Repeated minute-by-minute observations never inflate the tally. Count only
+    verified results attached to previously sent watchlist alerts.
+    """
+    rows = db.execute('''SELECT n.fixture_id, n.market, MIN(o.result),
+             COUNT(DISTINCT o.result),
+             SUM(CASE WHEN o.result='PENDING' THEN 1 ELSE 0 END)
+        FROM result_notices n
+        JOIN sent_alerts a ON a.fixture_id=n.fixture_id AND a.market=n.market
+        JOIN observations o ON o.fixture_id=n.fixture_id AND o.market=n.market
+        GROUP BY n.fixture_id, n.market''').fetchall()
+    seen = {}
+    for fid, market, outcome, distinct_results, pending_count in rows:
+        if distinct_results == 1 and pending_count == 0 and outcome in ('WIN', 'LOSS'):
+            seen[(fid, market)] = outcome
+    seen[(current_fixture_id, current_market)] = current_outcome
+    total_w = sum(v == 'WIN' for v in seen.values())
+    total_l = sum(v == 'LOSS' for v in seen.values())
+    market_values = [v for (fid, mkt), v in seen.items() if mkt == current_market]
+    market_w = sum(v == 'WIN' for v in market_values)
+    market_l = sum(v == 'LOSS' for v in market_values)
+    return total_w, total_l, market_w, market_l
+
+
 def deliver_result_notices(limit=3):
     """Notify once per settled fixture/market that was sent as a watchlist alert.
 
@@ -61,6 +88,15 @@ def deliver_result_notices(limit=3):
         first_probability, first_minute = first if first else (None, minute)
         estimate = ('unavailable' if first_probability is None
                     else f'{first_probability*100:.1f}% (experimental)')
+        with _connect() as db:
+            total_w, total_l, market_w, market_l = _notified_tally(
+                db, fixture_id, market, outcome)
+        total_count = total_w + total_l
+        tally = (f'\n\nRUNNING ALERT RECORD (unique fixture + market)\n'
+                 f'All alerted markets: {total_w} W - {total_l} L '
+                 f'({100 * total_w / total_count:.1f}% outcome frequency)\n'
+                 f'{LABELS.get(market, market)}: {market_w} W - {market_l} L\n'
+                 'These are verified market outcomes, not placed bets or profit.')
         message = (f'FIRST-HALF RESULT: {outcome}\n'
                    f'{home} vs {away}\n'
                    f'Market: {LABELS.get(market, market)}\n'
@@ -68,7 +104,7 @@ def deliver_result_notices(limit=3):
                    f'First estimate: {estimate}\n'
                    f'Observations settled: {count}\n'
                    'This is a verified market outcome, not a confirmed placed bet.\n'
-                   'No bookmaker odds or stakes were recorded.')
+                   'No bookmaker odds or stakes were recorded.' + tally)
         try:
             send_telegram(token, chat_id, message)
             with _connect() as db:
