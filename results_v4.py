@@ -86,8 +86,18 @@ def deliver_result_notices(limit=3):
                 WHERE fixture_id=? AND market=? ORDER BY minute ASC LIMIT 1''',
                 (fixture_id, market)).fetchone()
         first_probability, first_minute = first if first else (None, minute)
-        estimate = ('unavailable' if first_probability is None
-                    else f'{first_probability*100:.1f}% (experimental)')
+        # If an alert was sent, show its actual selection minute rather than
+        # the research model's earliest recorded observation.
+        with _connect() as db:
+            table_exists = db.execute("""SELECT 1 FROM sqlite_master
+                WHERE type='table' AND name='alert_details'""").fetchone()
+            selected = (db.execute("""SELECT selected_minute, estimate
+                FROM alert_details WHERE fixture_id=? AND market=?""",
+                (fixture_id, market)).fetchone() if table_exists else None)
+        selected_minute = selected[0] if selected else None
+        alert_probability = selected[1] if selected else first_probability
+        estimate = ('unavailable' if alert_probability is None
+                    else f'{alert_probability*100:.1f}% (experimental)')
         with _connect() as db:
             total_w, total_l, market_w, market_l = _notified_tally(
                 db, fixture_id, market, outcome)
@@ -97,14 +107,18 @@ def deliver_result_notices(limit=3):
                  f'({100 * total_w / total_count:.1f}% outcome frequency)\n'
                  f'{LABELS.get(market, market)}: {market_w} W - {market_l} L\n'
                  'These are verified market outcomes, not placed bets or profit.')
-        message = (f'FIRST-HALF RESULT: {outcome}\n'
+        minute_label = (f"Selected at {selected_minute}'" if selected_minute is not None
+                        else f"First recorded at {first_minute}' (older alert)")
+        quick_record = (f'All alerts: {total_w} W / {total_l} L '
+                        f'({100*total_w/total_count:.1f}% outcomes)\n'
+                        f'This market: {market_w} W / {market_l} L')
+        message = (f'{"✅" if outcome == "WIN" else "❌"} FIRST-HALF {outcome}\n'
                    f'{home} vs {away}\n'
-                   f'Market: {LABELS.get(market, market)}\n'
-                   f'First recorded minute: {first_minute}\n'
-                   f'First estimate: {estimate}\n'
-                   f'Observations settled: {count}\n'
-                   'This is a verified market outcome, not a confirmed placed bet.\n'
-                   'No bookmaker odds or stakes were recorded.' + tally)
+                   f'{LABELS.get(market, market)}\n'
+                   f'{minute_label} | Model: {estimate}\n'
+                   f'{quick_record}\n'
+                   'Verified market outcome, not a confirmed placed bet. '
+                   'No bookmaker odds verified.')
         try:
             send_telegram(token, chat_id, message)
             with _connect() as db:

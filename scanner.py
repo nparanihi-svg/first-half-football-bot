@@ -6,6 +6,7 @@ from provider import FootballAPI, parse_fixture
 from engine import predict
 from signal_rules import watchlist_reason
 from tracking_v3 import record, verify_one
+from early_wins_v53 import notify_early_win
 from results_v4 import deliver_result_notices
 
 MAX_FIXTURES_PER_SCAN = max(1, min(30, int(os.getenv('MAX_FIXTURES_PER_SCAN', '20'))))
@@ -54,6 +55,17 @@ def claim_alert(fixture_id, market):
             return True
         except sqlite3.IntegrityError:
             return False
+
+def save_alert_details(fixture_id, market, minute, probability):
+    """Persist the selected alert minute, independently of research observations."""
+    with sqlite3.connect(STATE_DB, timeout=10) as db:
+        db.execute('CREATE TABLE IF NOT EXISTS alert_details ('
+                   'fixture_id INTEGER NOT NULL, market TEXT NOT NULL, '
+                   'selected_minute INTEGER NOT NULL, estimate REAL, '
+                   'PRIMARY KEY (fixture_id, market))')
+        db.execute('INSERT OR IGNORE INTO alert_details VALUES (?,?,?,?)',
+                   (fixture_id, market, int(minute), probability))
+
 
 def release_alert(fixture_id, market):
     with sqlite3.connect(STATE_DB) as db:
@@ -132,19 +144,24 @@ def scan():
                     continue
                 from alerts import send_telegram
                 message = (
-                    'IN-PLAY RESEARCH WATCHLIST (not a bet recommendation)\n'
-                    f'{snapshot.home} vs {snapshot.away}\nLeague: {snapshot.league}\n'
-                    f'Minute: {minute}\nMarket: {result["label"]}\n'
-                    f'Experimental estimate: {probability * 100:.1f}%\n'
-                    f'Watchlist trigger: {reason}\n\n'
-                    f'{_explanation(snapshot, result)}\n\n'
-                    'No bookmaker odds verified. Model not calibrated.'
+                    '⚽ FIRST-HALF WATCHLIST\n'
+                    f'{snapshot.home} vs {snapshot.away}\n'
+                    f"{snapshot.league} | Selected at {minute}'\n"
+                    f'Market: {result["label"]}\n'
+                    f'Model estimate: {probability * 100:.1f}% (experimental)\n'
+                    f'1H goals: {_fmt(snapshot.half_goals)} | '
+                    f'corners: {_fmt(snapshot.half_corners)}\n'
+                    'Sportsbet: unavailable | bet365: unavailable\n'
+                    'Odds not verified. Research only; not a betting recommendation.'
                 )
                 try:
                     send_telegram(token, chat_id, message)
+                    save_alert_details(fixture_id, result["market"], minute, probability)
                 except Exception:
                     release_alert(fixture_id, result['market'])
                     raise
+            # Live milestone alerts do not change final settlement records.
+            notify_early_win(snapshot)
         except Exception as error:
             if 'API_LOCAL_BUDGET_EXHAUSTED' in str(error):
                 print('V5.2 local request budget reached; remaining fixture scans deferred', flush=True)
