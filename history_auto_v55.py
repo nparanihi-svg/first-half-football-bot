@@ -88,27 +88,77 @@ def has_cache(db, key):
 
 
 def build_jobs(db, teams):
-    """New teams first, then first-half corner responses on cached fixtures."""
-    missing = []
-    statistics = []
-    seen_fixtures = set()
-    for tid in teams:
+    """Complete imminent fixtures as pairs, then broaden global historical coverage.
+
+    Cached-only queue building: no HTTP. First obtain both teams' fixture
+    histories, then request missing 1H corner samples for their recent matches.
+    Never treat absent corner stats as zero. Keep all leagues eligible.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    upcoming = []
+    try:
+        with sqlite3.connect(STATE_DB, timeout=5) as state:
+            exists = state.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='prematch_v56_fixtures'").fetchone()
+            if exists:
+                upcoming = state.execute(
+                    "SELECT home_id, away_id, kickoff_at FROM prematch_v56_fixtures "
+                    "WHERE kickoff_at > ? ORDER BY kickoff_at ASC, fixture_id ASC",
+                    (now,)).fetchall()
+    except sqlite3.Error as exc:
+        print('V5.6 fixture readiness queue fallback:', str(exc)[:100], flush=True)
+
+    jobs = []
+    seen_jobs = set()
+    seen_teams = set()
+
+    def add(kind, ident):
+        job = (kind, ident)
+        if job not in seen_jobs:
+            jobs.append(job)
+            seen_jobs.add(job)
+
+    def team_corners(tid, max_per_team=5):
         row = has_cache(db, f'team:{tid}:last40')
         if row is None:
-            missing.append(('fixtures', tid))
+            return
+        try:
+            fixtures = hist.half_goals(json.loads(row[0]), tid, 20)
+        except (ValueError, TypeError, KeyError) as exc:
+            print('V5.6 cached team history unreadable:', tid, str(exc)[:80], flush=True)
+            return
+        count = 0
+        for fixture in fixtures:
+            fid = int(fixture['id'])
+            if has_cache(db, f'first_half_stats:{fid}') is None:
+                add('corners', fid)
+                count += 1
+                if count >= max_per_team:
+                    break
+
+    # Organise the first upcoming matches by complete two-team readiness.
+    # If either team lacks fixtures, queue both missing team lists together.
+    # Once both lists exist, focus their corner samples before moving on.
+    for home_id, away_id, _kick in upcoming:
+        pair = list(dict.fromkeys((home_id, away_id)))
+        for tid in pair:
+            seen_teams.add(tid)
+            if has_cache(db, f'team:{tid}:last40') is None:
+                add('fixtures', tid)
+        if all(has_cache(db, f'team:{tid}:last40') is not None for tid in pair):
+            for tid in pair:
+                team_corners(tid, max_per_team=5)
+
+    # Preserve the original worldwide fallback for all other discovered teams.
+    # Teams without available fixture-level pairings are still eligible.
+    for tid in teams:
+        if tid in seen_teams:
             continue
-        fixtures = json.loads(row[0])
-        for f in hist.half_goals(fixtures, tid, 20):
-            fid = int(f['id'])
-            if fid not in seen_fixtures and has_cache(db, f'first_half_stats:{fid}') is None:
-                seen_fixtures.add(fid)
-                statistics.append(('corners', fid))
-    jobs = []
-    for i in range(max(len(missing), len(statistics))):
-        if i < len(missing):
-            jobs.append(missing[i])
-        if i < len(statistics):
-            jobs.append(statistics[i])
+        if has_cache(db, f'team:{tid}:last40') is None:
+            add('fixtures', tid)
+        else:
+            team_corners(tid, max_per_team=5)
     return jobs
 
 
