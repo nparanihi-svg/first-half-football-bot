@@ -26,6 +26,7 @@ jobs:
       - name: Test worker for 75 seconds
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          DATA_DIR: ${{ runner.temp }}/football-bot-data
         shell: bash
         run: |
           set +e
