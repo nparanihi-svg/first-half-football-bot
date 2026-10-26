@@ -88,7 +88,7 @@ def extract_first_half_corners(response, home_id, away_id):
         team_id = (item.get('team') or {}).get('id')
         if team_id not in (home_id, away_id):
             continue
-        stats = item.get('statistics')
+stats = {'first_half': item['statistics_1h']} if isinstance(item.get('statistics_1h'), list) else item.get('statistics')
         # Supported explicit layouts: nested FIRST_HALF stats object, or
         # team block labelled with first-half period.
         if isinstance(stats, dict):
