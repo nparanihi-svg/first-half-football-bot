@@ -44,3 +44,4 @@ jobs:
           grep -q "First-half matches checked:" worker-test.log || exit 1
 
           echo "Worker startup and scan test passed"
+          python -m unittest -v test_readiness_v57
