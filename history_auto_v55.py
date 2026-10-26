@@ -91,7 +91,13 @@ def build_jobs(db, teams):
             if fid not in seen_fixtures and has_cache(db, f'first_half_stats:{fid}') is None:
                 seen_fixtures.add(fid)
                 statistics.append(('corners', fid))
-    return missing + statistics
+    jobs = []
+    for i in range(max(len(missing), len(statistics))):
+        if i < len(missing):
+            jobs.append(missing[i])
+        if i < len(statistics):
+            jobs.append(statistics[i])
+    return jobs
 
 
 def run(dry_run=False):
