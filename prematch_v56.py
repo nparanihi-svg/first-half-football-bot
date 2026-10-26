@@ -22,7 +22,43 @@ def init(db):
         (team_id INTEGER PRIMARY KEY, kickoff_at TEXT NOT NULL, last_seen TEXT NOT NULL)""")
     db.execute("""CREATE TABLE IF NOT EXISTS prematch_v56_checks
         (day TEXT PRIMARY KEY, checked_at TEXT NOT NULL)""")
+    # Separate fixture-level records; preserve existing team queue unchanged.
+    db.execute("""CREATE TABLE IF NOT EXISTS prematch_v56_fixtures
+        (fixture_id INTEGER PRIMARY KEY, home_id INTEGER NOT NULL,
+         away_id INTEGER NOT NULL, league_id INTEGER, league_name TEXT,
+         country TEXT, kickoff_at TEXT NOT NULL, last_seen TEXT NOT NULL)""")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_prematch_v56_kickoff ON prematch_v56_fixtures(kickoff_at)")
     db.commit()
+
+
+def report():
+    """Read-only worldwide pre-match readiness report. No HTTP requests."""
+    with sqlite3.connect(STATE_DB, timeout=15) as db:
+        found = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='prematch_v56_fixtures'").fetchone()
+        if not found:
+            print('No fixture-level records yet; run enabled V5.6 discovery first.')
+            return
+        rows = db.execute("""SELECT fixture_id,home_id,away_id,league_name,country,kickoff_at
+                             FROM prematch_v56_fixtures WHERE kickoff_at > ?
+                             ORDER BY kickoff_at ASC""",
+                          (datetime.now(timezone.utc).isoformat(),)).fetchall()
+    if not rows:
+        print('No upcoming fixtures recorded yet. No API calls.')
+        return
+    import history_v55 as history
+    with history.db_open() as cache:
+        have = {int(k.split(':')[1]) for (k,) in cache.execute(
+            "SELECT key FROM cache WHERE key LIKE 'team:%:last40'") if len(k.split(':')) == 3}
+    both = sum(a in have and b in have for _,a,b,*_ in rows)
+    countries = len({country for _,_,_,_,country,_ in rows if country})
+    leagues = len({(country,name) for _,_,_,name,country,_ in rows})
+    print(f'V5.6 WORLDWIDE READINESS: {len(rows)} upcoming fixtures; {countries} countries; {leagues} competitions')
+    print(f'Both teams with cached fixture lists: {both}/{len(rows)}')
+    print('Upcoming earliest fixtures (fixture, country, league, goal-history list ready):')
+    for fid,a,b,league,country,kick in rows[:12]:
+        print(fid, country or '?', league or '?', kick, 'YES' if a in have and b in have else 'NO')
+    print('Historical corner completeness needs a separate first-half data check; not inferred from fixture lists.')
+    print('Read-only report: no API requests; original live scanner unchanged.')
 
 
 def discover(dry_run=False):
@@ -64,6 +100,16 @@ def discover(dry_run=False):
                     kick = datetime.fromisoformat(f['fixture']['date'].replace('Z','+00:00')).astimezone(timezone.utc)
                     if not (now < kick <= now+timedelta(hours=HOURS_AHEAD)):
                         continue
+                    fid = int(f['fixture']['id'])
+                    home_id = int(f['teams']['home']['id'])
+                    away_id = int(f['teams']['away']['id'])
+                    league = f.get('league') or {}
+                    if fid > 0 and home_id > 0 and away_id > 0:
+                        db.execute("""INSERT OR REPLACE INTO prematch_v56_fixtures
+                            (fixture_id,home_id,away_id,league_id,league_name,country,kickoff_at,last_seen)
+                            VALUES (?,?,?,?,?,?,?,?)""",
+                            (fid,home_id,away_id,league.get('id'),league.get('name'),
+                             league.get('country'),kick.isoformat(),now.isoformat()))
                     for side in ('home','away'):
                         tid=int(f['teams'][side]['id'])
                         if tid <= 0: continue
@@ -79,6 +125,7 @@ def discover(dry_run=False):
             total+=accepted
             print(f'V5.6 {day}: discovered {accepted} upcoming team slots; history budget use {used}',flush=True)
         db.execute('DELETE FROM prematch_v56_teams WHERE kickoff_at <= ?', (now.isoformat(),))
+        db.execute('DELETE FROM prematch_v56_fixtures WHERE kickoff_at <= ?', (now.isoformat(),))
         db.commit()
         print('V5.6 upcoming team slots saved:',total,flush=True)
 
@@ -87,7 +134,11 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--dry-run',action='store_true')
     parser.add_argument('--refresh',action='store_true')
+    parser.add_argument('--report',action='store_true',help='show worldwide fixture coverage without API requests')
     args=parser.parse_args()
+    if args.report:
+        report()
+        raise SystemExit(0)
     if not args.dry_run and not args.refresh:
         parser.error('Use --dry-run (no requests) or --refresh (real requests)')
     discover(dry_run=args.dry_run)
