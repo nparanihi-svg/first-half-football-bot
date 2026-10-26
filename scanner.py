@@ -121,6 +121,7 @@ def scan():
             snapshot = parse_fixture(fixture, stats)
             for result in predict(snapshot):
                 record(snapshot, result)
+                __import__('shadow_v55').record_shadow(fixture, result)
                 probability = result['probability']
                 print(snapshot.home, 'vs', snapshot.away,
                       '| Minute:', minute, '| Market:', result['label'],
