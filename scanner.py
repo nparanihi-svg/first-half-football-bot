@@ -148,7 +148,7 @@ def scan():
                     f'{snapshot.home} vs {snapshot.away}\n'
                     f"{snapshot.league} | Selected at {minute}'\n"
                     f'Market: {result["label"]}\n'
-                    f'Model estimate: {probability * 100:.1f}% (experimental)\n'
+                    f'Estimated chance: {probability * 100:.1f}% (experimental)\n'
                     f'1H goals: {_fmt(snapshot.half_goals)} | '
                     f'corners: {_fmt(snapshot.half_corners)}\n'
                     'Sportsbet: unavailable | bet365: unavailable\n'

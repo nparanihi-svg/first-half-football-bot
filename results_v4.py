@@ -115,7 +115,7 @@ def deliver_result_notices(limit=3):
         message = (f'{"✅" if outcome == "WIN" else "❌"} FIRST-HALF {outcome}\n'
                    f'{home} vs {away}\n'
                    f'{LABELS.get(market, market)}\n'
-                   f'{minute_label} | Model: {estimate}\n'
+                   f'{minute_label} | Estimated chance: {estimate}\n'
                    f'{quick_record}\n'
                    'Verified market outcome, not a confirmed placed bet. '
                    'No bookmaker odds verified.')
