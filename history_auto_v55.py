@@ -28,6 +28,18 @@ def queue_teams():
         rows = db.execute('''SELECT home_id,away_id FROM historical_shadow_v55
                              ORDER BY captured_at DESC LIMIT 250''').fetchall()
     teams = []
+    # V5.6: upcoming teams first, sourced by prematch_v56 without affecting live scanning.
+    try:
+        with sqlite3.connect(STATE_DB, timeout=10) as db:
+            found = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='prematch_v56_teams'").fetchone()
+            if found:
+                soon = db.execute("SELECT team_id FROM prematch_v56_teams WHERE kickoff_at > ? ORDER BY kickoff_at ASC LIMIT 120",
+                    (datetime.now(timezone.utc).isoformat(),)).fetchall()
+                for (tid,) in soon:
+                    if isinstance(tid, int) and tid > 0 and tid not in teams:
+                        teams.append(tid)
+    except sqlite3.Error as exc:
+        print('V5.6 prematch queue read skipped:', str(exc)[:100], flush=True)
     for home, away in rows:
         for tid in (home, away):
             if isinstance(tid, int) and tid > 0 and tid not in teams:

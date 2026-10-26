@@ -18,6 +18,9 @@ HISTORY_INTERVAL = 900
 
 def _run_history():
     try:
+        if os.getenv('ENABLE_PREMATCH_V56', 'false').lower() == 'true':
+            from prematch_v56 import discover
+            discover()
         from history_auto_v55 import run
         run()
     except Exception as error:
