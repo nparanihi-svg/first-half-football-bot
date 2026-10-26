@@ -16,9 +16,9 @@ import requests
 import history_v55 as hist
 
 STATE_DB = os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3')
-RUN_MAX = min(2, max(0, int(os.getenv('HISTORY_AUTO_RUN_MAX', '2'))))
-DAY_MAX = min(6, max(0, int(os.getenv('HISTORY_AUTO_DAY_MAX', '6'))))
-MONTH_MAX = min(100, max(0, int(os.getenv('HISTORY_AUTO_MONTH_MAX', '100'))))
+RUN_MAX = min(10, max(0, int(os.getenv('HISTORY_AUTO_RUN_MAX', '2'))))
+DAY_MAX = min(500, max(0, int(os.getenv('HISTORY_AUTO_DAY_MAX', '6'))))
+MONTH_MAX = min(10000, max(0, int(os.getenv('HISTORY_AUTO_MONTH_MAX', '100'))))
 
 
 def queue_teams():
