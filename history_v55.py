@@ -10,6 +10,7 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import requests
+from rate_limit_v571 import guarded_get
 
 BASE = 'https://v3.football.api-sports.io'
 CACHE = Path(os.getenv('HISTORY_V55_DB', '/var/data/first_half_history_v55.sqlite3'))
@@ -17,7 +18,7 @@ TERMINAL = {'FT', 'AET', 'PEN'}
 
 
 def api_get(session, endpoint, **params):
-    response = session.get(BASE + endpoint, params=params, timeout=25)
+    response = guarded_get(session, BASE + endpoint, params=params, timeout=25)
     response.raise_for_status()
     payload = response.json()
     if payload.get('errors'):
