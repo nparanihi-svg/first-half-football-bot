@@ -92,6 +92,27 @@ def _explanation(snapshot, result):
         'Possession is shown for context, not yet a probability input.'
     )
 
+def _record_v58_shadow(fixture, snapshot):
+    """Opt-in research only: never interrupt existing scanning or alerts."""
+    if os.getenv('ENABLE_V58_SHADOW', 'false').lower() != 'true':
+        return
+    try:
+        from v58_integration import observe_fixture
+        outcome = observe_fixture(
+            fixture, snapshot,
+            journal_db=os.getenv('V58_JOURNAL_DB') or os.getenv('SIGNAL_DB_PATH'),
+            cache_db=os.getenv('HISTORY_V55_DB'),
+            data_age_seconds=getattr(snapshot, 'data_age_seconds', 0),
+            enabled=True,
+        )
+        print('V5.8 SHADOW:', fixture['fixture']['id'],
+              outcome.get('status'),
+              (outcome.get('reason') or (outcome.get('evaluation') or {}).get('reason', ''))[:120],
+              flush=True)
+    except Exception as exc:
+        # Research must never block production-style signals.
+        print('V5.8 SHADOW ERROR:', type(exc).__name__, str(exc)[:120], flush=True)
+
 def scan():
     key = os.getenv('API_FOOTBALL_KEY')
     if not key:
@@ -119,6 +140,7 @@ def scan():
         try:
             stats = api.first_half_stats(fixture_id)
             snapshot = parse_fixture(fixture, stats)
+            _record_v58_shadow(fixture, snapshot)
             for result in predict(snapshot):
                 record(snapshot, result)
                 __import__('shadow_v55').record_shadow(fixture, result)
