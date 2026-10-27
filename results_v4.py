@@ -7,6 +7,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from win365_daily import daily_line
 
 DB_PATH = Path(os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3'))
 LABELS = {'FH_OVER_0_5_GOALS': '1H Over 0.5 Goals',
@@ -109,9 +110,19 @@ def deliver_result_notices(limit=3):
                  'These are verified market outcomes, not placed bets or profit.')
         minute_label = (f"Selected at {selected_minute}'" if selected_minute is not None
                         else f"First recorded at {first_minute}' (older alert)")
-        quick_record = (f'All alerts: {total_w} W / {total_l} L '
-                        f'({100*total_w/total_count:.1f}% outcomes)\n'
-                        f'This market: {market_w} W / {market_l} L')
+        with _connect() as db:
+    today_record = daily_line(
+        db, fixture_id, market, outcome
+    )
+
+quick_record = (
+    f'🏆 WIN365 — RESULTS\n'
+    f'{today_record}\n'
+    f'\nOVERALL RECORD\n'
+    f'All alerts: {total_w} W / {total_l} L '
+    f'({100*total_w/total_count:.1f}% outcomes)\n'
+    f'This market: {market_w} W / {market_l} L'
+)
         message = (f'{"✅" if outcome == "WIN" else "❌"} FIRST-HALF {outcome}\n'
                    f'{home} vs {away}\n'
                    f'{LABELS.get(market, market)}\n'
