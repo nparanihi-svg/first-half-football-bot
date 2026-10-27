@@ -48,3 +48,4 @@ jobs:
           python -m pytest -v test_rate_limit_v571.py
           python -m pytest -v test_v58_shadow.py
           python -m pytest -v test_v58_recorder.py
+          python -m pytest -v test_v58_integration.py
