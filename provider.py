@@ -4,6 +4,7 @@ import time
 import requests
 from collections import deque, Counter
 from engine import Snapshot
+from rate_limit_v571 import guarded_get
 
 BASE = 'https://v3.football.api-sports.io'
 # Shared across FootballAPI instances created by scanner.scan() in a single worker.
@@ -36,7 +37,7 @@ class FootballAPI:
                     else 'live' if endpoint == '/fixtures' and params.get('live') == 'all'
                     else 'settlement_or_other')
         self._counts[category] += 1
-        response = self.session.get(BASE + endpoint, params=params, timeout=20)
+        response = guarded_get(self.session, BASE + endpoint, params=params, timeout=20)
         remaining = response.headers.get('x-ratelimit-requests-remaining')
         minute_remaining = response.headers.get('X-RateLimit-Remaining')
         if remaining is not None:
