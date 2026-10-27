@@ -1,4 +1,3 @@
-
 """V4 results delivery and conservative fixture-level performance report.
 
 Uses the existing V3 database. This module does not place bets and its output is
@@ -110,8 +109,8 @@ def deliver_result_notices(limit=3):
         minute_label = (f"Selected at {selected_minute}'" if selected_minute is not None
                         else f"First recorded at {first_minute}' (older alert)")
 
-        # Include the currently verified outcome before its notice receipt.
-        # The day is determined by settlement time in Perth.
+        # Include the currently verified outcome even before its notice receipt
+        # is written. The day is determined by settlement time in Perth.
         with _connect() as db:
             today_record = daily_line(db, fixture_id, market, outcome)
 
