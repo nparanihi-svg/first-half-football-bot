@@ -51,3 +51,4 @@ jobs:
           python -m pytest -v test_v58_integration.py
           python -m pytest -v test_v58_scanner_hook.py
           python -m pytest -v test_rate_limit_v581.py
+          python -m pytest -v test_win365_telegram.py
