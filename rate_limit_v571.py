@@ -58,18 +58,42 @@ def set_cooldown(seconds=None):
         current = db.execute("SELECT value FROM api_guard_state_v571 WHERE name='cooldown_until'").fetchone()
         db.execute("INSERT OR REPLACE INTO api_guard_state_v571(name,value) VALUES ('cooldown_until',?)",
                    (max(until, current[0] if current else 0),))
-    print(f'API shared cooldown activated for at least {duration}s after HTTP 429', flush=True)
+    print(f'API shared cooldown activated for at least {duration}s after rate-limit response', flush=True)
+
+
+def _json_rate_limited(response):
+    """Recognise API-Sports rateLimit errors returned with HTTP 200.
+
+    Other application-level errors remain handled by the calling adapter.
+    """
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    errors = payload.get('errors')
+    if isinstance(errors, dict):
+        return any(str(key).lower() == 'ratelimit' and bool(value)
+                   for key, value in errors.items())
+    return False
+
+
+def _retry_seconds(response):
+    retry = response.headers.get('Retry-After')
+    try:
+        return int(retry) if retry is not None else None
+    except (ValueError, TypeError):
+        return None
 
 
 def guarded_get(session, url, **kwargs):
     reserve_request()
     response = session.get(url, **kwargs)
     if response.status_code == 429:
-        retry = response.headers.get('Retry-After')
-        try:
-            seconds = int(retry) if retry is not None else None
-        except ValueError:
-            seconds = None
-        set_cooldown(seconds)
+        set_cooldown(_retry_seconds(response))
         raise APICooldown('API_HTTP_429_SHARED_COOLDOWN')
+    if response.status_code < 400 and _json_rate_limited(response):
+        set_cooldown(_retry_seconds(response))
+        raise APICooldown('API_JSON_RATELIMIT_SHARED_COOLDOWN')
     return response
