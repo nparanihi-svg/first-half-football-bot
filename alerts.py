@@ -52,3 +52,18 @@ def send_telegram(token: str, chat_id: str, message: str):
     if primary_error is not None:
         raise primary_error
     return primary_result
+def edit_telegram(token, chat_id, message_id, message):
+    response = requests.post(
+        f"https://api.telegram.org/bot{token}/editMessageText",
+        json={
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": message,
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not data.get("ok"):
+        raise RuntimeError("Telegram edit failed")
+    return data
