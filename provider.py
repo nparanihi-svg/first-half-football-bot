@@ -71,8 +71,8 @@ class FootballAPI:
             self._counts['stats_cache_hits'] += 1
             return saved[1]
         stats = self.get('/fixtures/statistics', fixture=fixture_id, half='true')
-                if ttl and stats:
-            _STAT_CACHE[key] = (time.monotonic(), stats)
+        if ttl and stats:
+            _STAT_CACHE[key] = (time.monotonic(), stats) 
     
         if len(_STAT_CACHE) > 500:
             cutoff = time.monotonic() - max(ttl, 60) * 2
