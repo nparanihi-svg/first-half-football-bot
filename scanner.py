@@ -139,7 +139,7 @@ def scan():
         checked += 1
         try:
             stats = api.first_half_stats(fixture_id)
-    print("WIN365 RAW STATS:", fixture_id, repr(stats)[:1500], flush=True)
+            print("WIN365 RAW STATS:", fixture_id, repr(stats)[:1500], flush=True)
             snapshot = parse_fixture(fixture, stats)
             _record_v58_shadow(fixture, snapshot)
             for result in predict(snapshot):
