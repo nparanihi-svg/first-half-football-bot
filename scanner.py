@@ -127,6 +127,11 @@ def scan():
         return
     print('Scan:', datetime.now(timezone.utc).isoformat(), flush=True)
     print('Live matches:', len(fixtures), flush=True)
+
+    for f in fixtures:
+    s = f.get('fixture', {}).get('status', {})
+    print("WIN365 FIXTURE:", f.get('fixture', {}).get('id'), s.get('short'), s.get('elapsed'), flush=True)
+
     selected = eligible_fixtures(fixtures)
     print('V5.2 eligible rotation: selected', len(selected), 'fixtures', flush=True)
     checked = 0
