@@ -183,12 +183,12 @@ def scan():
                     'Sportsbet: unavailable | bet365: unavailable\n'
                     'Odds not verified. Research only; not a betting recommendation.'
                 )
-                try:
-                    send_telegram(token, chat_id, message)
-                    save_alert_details(fixture_id, result["market"], minute, probability)
-                except Exception:
-                    release_alert(fixture_id, result['market'])
-                    raise
+                 try:
+                send_telegram(token, chat_id, message)
+                save_alert_details(fixture_id, result["market"], minute, probability)
+            except Exception:
+                release_alert(fixture_id, result["market"])
+                raise
             # Live milestone alerts do not change final settlement records.
             notify_early_win(snapshot)
         except Exception as error:
