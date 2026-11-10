@@ -47,8 +47,17 @@ def edit_alert(db, token, fixture_id, market, status, *, detail=None, record=Non
         return False
     rows = db.execute('''SELECT chat_id, message_id, body, record FROM alert_messages
                          WHERE fixture_id=? AND market=?''', (fixture_id, market)).fetchall()
-    from alerts import edit_telegram
+    from alerts import edit_telegram, ticket_photo
+    from win365_ticket import PREFIX, render_ticket
     for chat_id, message_id, body, original_record in rows:
+        if body.startswith(PREFIX):
+            if record is None:  # Early milestone; wait for verified settlement.
+                continue
+            final_status = 'WON' if status.endswith('WON') else 'LOST'
+            photo = render_ticket(body, record, status=final_status,
+                                  detail=detail or 'Result confirmed')
+            ticket_photo(token, chat_id, photo, f'WIN365 · {final_status}', message_id=message_id)
+            continue
         edit_telegram(token, chat_id, message_id,
                       alert_text(status, body, record or original_record, detail),
                       parse_mode='HTML')

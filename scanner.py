@@ -4,13 +4,14 @@ import sqlite3
 from datetime import datetime, timezone
 from provider import FootballAPI, parse_fixture
 from engine import predict
+from win365_ticket import render_ticket, ticket_body
 import halftime_shadow
 from signal_rules import watchlist_reason
 from blocked_shot_audit import CORNERS, record_candidate
 from tracking_v3 import record, verify_one
 from early_wins_v53 import notify_early_win
 from results_v4 import alert_record, deliver_result_notices
-from win365_alerts import alert_body, alert_text, save_message
+from win365_alerts import save_message
 from win365_live_odds import first_half_goals_quote
 
 MAX_FIXTURES_PER_SCAN = max(1, min(30, int(os.getenv('MAX_FIXTURES_PER_SCAN', '20'))))
@@ -209,12 +210,11 @@ def scan():
                             )):
                                 raise
                             print('Live goals odds unavailable:', type(exc).__name__, flush=True)
-                    body = alert_body(snapshot, result['label'], probability,
-                                      fixture.get('goals') or {}, quote=quote)
+                    body = ticket_body(snapshot, result['label'], probability, fixture, quote)
                     with sqlite3.connect(STATE_DB, timeout=10) as db:
                         tally = alert_record(db)
-                    send_telegram(token, chat_id, alert_text('🟩 WIN365 · LIVE WATCH', body, tally),
-                                  on_delivery=remember_delivery, parse_mode='HTML')
+                    send_telegram(token, chat_id, f"WIN365 · LIVE WATCH · {result['label']}",
+                                  on_delivery=remember_delivery, photo=render_ticket(body, tally))
                 except Exception as exc:
                     if not delivered:
                         release_alert(fixture_id, result['market'])

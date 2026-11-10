@@ -24,7 +24,7 @@ def _send_one(token: str, chat_id: str, message: str, *, parse_mode=None):
     return data
 
 
-def send_telegram(token: str, chat_id: str, message: str, *, on_delivery=None, parse_mode=None):
+def send_telegram(token: str, chat_id: str, message: str, *, on_delivery=None, parse_mode=None, photo=None):
     """Send to the original chat, plus optional additional chats.
 
     A failed secondary delivery is logged without raising, protecting the
@@ -42,7 +42,8 @@ def send_telegram(token: str, chat_id: str, message: str, *, on_delivery=None, p
     primary_error = None
     for index, destination in enumerate(destinations):
         try:
-            result = _send_one(token, destination, message, parse_mode=parse_mode)
+            result = (_send_one(token, destination, message, parse_mode=parse_mode)
+                      if photo is None else ticket_photo(token, destination, photo, message))
             if on_delivery:
                 on_delivery(destination, result["result"]["message_id"])
             if index == 0:
@@ -78,4 +79,31 @@ def edit_telegram(token, chat_id, message_id, message, *, parse_mode=None):
     data = response.json()
     if not data.get("ok"):
         raise RuntimeError("Telegram edit failed")
+    return data
+
+
+def ticket_photo(token, chat_id, photo, caption, *, message_id=None):
+    import json
+
+    payload = {'chat_id': chat_id}
+    if message_id is None:
+        method = 'sendPhoto'
+        payload['caption'] = caption
+    else:
+        method = 'editMessageMedia'
+        payload.update(message_id=message_id, media=json.dumps({
+            'type': 'photo', 'media': 'attach://photo', 'caption': caption,
+        }))
+    response = requests.post(
+        f'https://api.telegram.org/bot{token}/{method}', data=payload,
+        files={'photo': ('win365.png', photo, 'image/png')}, timeout=15,
+    )
+    if message_id is not None and response.status_code == 400:
+        data = response.json()
+        if 'message is not modified' in data.get('description', '').lower():
+            return data
+    response.raise_for_status()
+    data = response.json()
+    if not data.get('ok'):
+        raise RuntimeError('Telegram ticket delivery failed')
     return data
