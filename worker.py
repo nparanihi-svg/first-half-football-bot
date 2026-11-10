@@ -8,6 +8,7 @@ import time
 import threading
 from datetime import datetime, timedelta, timezone
 from scanner import scan
+from telegram_results import poll_results
 
 INTERVAL_SECONDS = max(15, int(os.getenv('SCAN_INTERVAL_SECONDS', '20')))
 ERROR_COOLDOWN_SECONDS = 300
@@ -29,6 +30,7 @@ def _run_history():
 
 def main():
     print(f'First Half Signal Lab worker started; interval={INTERVAL_SECONDS}s', flush=True)
+    threading.Thread(target=poll_results, daemon=True, name='telegram-results').start()
     pause_until = None
     next_history = time.monotonic() + 60
     history_thread = None
