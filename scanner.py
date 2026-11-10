@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from provider import FootballAPI, parse_fixture
 from engine import predict
+import halftime_shadow
 from signal_rules import watchlist_reason
 from blocked_shot_audit import CORNERS, record_candidate
 from tracking_v3 import record, verify_one
@@ -149,6 +150,10 @@ def scan():
             stats = api.first_half_stats(fixture_id)
             print("WIN365 RAW STATS:", fixture_id, repr(stats)[:1500], flush=True)
             snapshot = parse_fixture(fixture, stats)
+            try:
+                halftime_shadow.record_prediction(fixture, snapshot, stats)
+            except Exception as exc:
+                print('Halftime shadow record failed:', type(exc).__name__, flush=True)
             _record_v58_shadow(fixture, snapshot)
             for result in predict(snapshot):
                 record(snapshot, result)
@@ -231,6 +236,10 @@ def scan():
                     or 'API_MINUTE_LIMIT_NEAR' in str(error)):
                 raise
             print('Skipped fixture', fixture_id, type(error).__name__, str(error)[:160], flush=True)
+    try:
+        halftime_shadow.settle_predictions(fixtures)
+    except Exception as exc:
+        print('Halftime shadow settlement failed:', type(exc).__name__, flush=True)
     print('First-half matches checked:', checked, flush=True)
     try:
         verify_one(api, fixtures)
