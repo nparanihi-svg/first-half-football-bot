@@ -1,6 +1,7 @@
 """Provisional early-over alerts. Final verified outcomes are settled at HT."""
 import os
 import sqlite3
+from win365_alerts import edit_alert
 from datetime import datetime, timezone
 
 DB_PATH = os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3')
@@ -32,13 +33,18 @@ def notify_early_win(snapshot):
             fixture_id INTEGER NOT NULL, market TEXT NOT NULL, sent_at TEXT NOT NULL,
             PRIMARY KEY (fixture_id, market))''')
         selected_meta = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='alert_details'").fetchone()
+        has_results = db.execute("SELECT 1 FROM sqlite_master WHERE name='result_notices'").fetchone()
         delivered = 0
         for market, label, event in seen_markets:
             has_alert = db.execute('SELECT 1 FROM sent_alerts WHERE fixture_id=? AND market=?',
                                    (snapshot.fixture_id, market)).fetchone()
             prior = db.execute('SELECT 1 FROM early_win_notices WHERE fixture_id=? AND market=?',
                                (snapshot.fixture_id, market)).fetchone()
-            if not has_alert or prior:
+            settled = has_results and db.execute(
+                'SELECT 1 FROM result_notices WHERE fixture_id=? AND market=?',
+                (snapshot.fixture_id, market),
+            ).fetchone()
+            if not has_alert or prior or settled:
                 continue
             selected = (db.execute('SELECT selected_minute FROM alert_details WHERE fixture_id=? AND market=?',
                                    (snapshot.fixture_id, market)).fetchone() if selected_meta else None)
@@ -51,7 +57,16 @@ def notify_early_win(snapshot):
                        'Subject to data corrections and final half-time verification. '
                        'Not confirmation of bookmaker settlement.')
             from alerts import send_telegram
-            send_telegram(token, chat_id, message)
+            try:
+                edited = edit_alert(
+                    db, token, snapshot.fixture_id, market, '✅ WIN365 · WIN DETECTED',
+                    detail=f'{event.capitalize()} detected at {snapshot.elapsed}′ · Awaiting verification',
+                )
+                if not edited:
+                    send_telegram(token, chat_id, message)
+            except Exception as exc:
+                print('Early milestone delivery failed:', type(exc).__name__, flush=True)
+                continue
             db.execute('INSERT OR IGNORE INTO early_win_notices VALUES (?,?,?)',
                        (snapshot.fixture_id, market, datetime.now(timezone.utc).isoformat()))
             db.commit()

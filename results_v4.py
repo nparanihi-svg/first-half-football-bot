@@ -7,7 +7,8 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from win365_daily import daily_line
+from win365_daily import daily_line, daily_tally
+from win365_alerts import edit_alert
 
 DB_PATH = Path(os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3'))
 LABELS = {'FH_OVER_0_5_GOALS': '1H Over 0.5 Goals',
@@ -37,13 +38,27 @@ def _notified_tally(db, current_fixture_id, current_market, current_outcome):
     for fid, market, outcome, distinct_results, pending_count in rows:
         if distinct_results == 1 and pending_count == 0 and outcome in ('WIN', 'LOSS'):
             seen[(fid, market)] = outcome
-    seen[(current_fixture_id, current_market)] = current_outcome
+    if current_outcome in ('WIN', 'LOSS'):
+        seen[(current_fixture_id, current_market)] = current_outcome
     total_w = sum(v == 'WIN' for v in seen.values())
     total_l = sum(v == 'LOSS' for v in seen.values())
     market_values = [v for (fid, mkt), v in seen.items() if mkt == current_market]
     market_w = sum(v == 'WIN' for v in market_values)
     market_l = sum(v == 'LOSS' for v in market_values)
     return total_w, total_l, market_w, market_l
+
+
+def _ensure_result_notices(db):
+    db.execute('''CREATE TABLE IF NOT EXISTS result_notices (
+            fixture_id INTEGER NOT NULL, market TEXT NOT NULL, sent_at TEXT NOT NULL,
+            PRIMARY KEY (fixture_id, market))''')
+
+
+def alert_record(db, fixture_id=None, market=None, outcome=None):
+    _ensure_result_notices(db)
+    today_w, today_l = daily_tally(db, fixture_id, market, outcome)
+    total_w, total_l, _, _ = _notified_tally(db, fixture_id, market, outcome)
+    return f'Today (Perth) {today_w} W / {today_l} L · Overall {total_w} W / {total_l} L'
 
 
 def deliver_result_notices(limit=3):
@@ -60,9 +75,7 @@ def deliver_result_notices(limit=3):
         print('V4: result alerts enabled but Telegram credentials missing', flush=True)
         return 0
     with _connect() as db:
-        db.execute('''CREATE TABLE IF NOT EXISTS result_notices (
-            fixture_id INTEGER NOT NULL, market TEXT NOT NULL, sent_at TEXT NOT NULL,
-            PRIMARY KEY (fixture_id, market))''')
+        _ensure_result_notices(db)
         # Only notify markets for which a watchlist Telegram alert was claimed;
         # avoid flooding users for routine model observations.
         rows = db.execute('''SELECT o.fixture_id, o.market, MIN(o.home), MIN(o.away),
@@ -130,14 +143,17 @@ def deliver_result_notices(limit=3):
                    'Verified market outcome, not a confirmed placed bet. '
                    'No bookmaker odds verified.')
         try:
-            send_telegram(token, chat_id, message)
             with _connect() as db:
+                record = alert_record(db, fixture_id, market, outcome)
+                status = '✅ WIN365 · WON' if outcome == 'WIN' else '❌ WIN365 · LOST'
+                if not edit_alert(db, token, fixture_id, market, status, record=record):
+                    send_telegram(token, chat_id, message)
                 db.execute('INSERT OR IGNORE INTO result_notices VALUES (?,?,?)',
                            (fixture_id, market, datetime.now(timezone.utc).isoformat()))
             delivered += 1
             print('V4 result notification:', fixture_id, market, outcome, flush=True)
         except Exception as exc:
-            print('V4 Telegram delivery failed:', type(exc).__name__, str(exc)[:120], flush=True)
+            print('V4 Telegram delivery failed:', type(exc).__name__, flush=True)
             break
     return delivered
 

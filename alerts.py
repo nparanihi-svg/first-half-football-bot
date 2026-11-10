@@ -8,10 +8,13 @@ import os
 import requests
 
 
-def _send_one(token: str, chat_id: str, message: str):
+def _send_one(token: str, chat_id: str, message: str, *, parse_mode=None):
+    payload = {'chat_id': chat_id, 'text': message}
+    if parse_mode:
+        payload['parse_mode'] = parse_mode
     response = requests.post(
         f'https://api.telegram.org/bot{token}/sendMessage',
-        json={'chat_id': chat_id, 'text': message},
+        json=payload,
         timeout=15,
     )
     response.raise_for_status()
@@ -21,7 +24,7 @@ def _send_one(token: str, chat_id: str, message: str):
     return data
 
 
-def send_telegram(token: str, chat_id: str, message: str):
+def send_telegram(token: str, chat_id: str, message: str, *, on_delivery=None, parse_mode=None):
     """Send to the original chat, plus optional additional chats.
 
     A failed secondary delivery is logged without raising, protecting the
@@ -39,7 +42,9 @@ def send_telegram(token: str, chat_id: str, message: str):
     primary_error = None
     for index, destination in enumerate(destinations):
         try:
-            result = _send_one(token, destination, message)
+            result = _send_one(token, destination, message, parse_mode=parse_mode)
+            if on_delivery:
+                on_delivery(destination, result["result"]["message_id"])
             if index == 0:
                 primary_result = result
         except Exception as exc:
@@ -52,16 +57,23 @@ def send_telegram(token: str, chat_id: str, message: str):
     if primary_error is not None:
         raise primary_error
     return primary_result
-def edit_telegram(token, chat_id, message_id, message):
+
+
+def edit_telegram(token, chat_id, message_id, message, *, parse_mode=None):
     response = requests.post(
         f"https://api.telegram.org/bot{token}/editMessageText",
         json={
             "chat_id": chat_id,
             "message_id": message_id,
             "text": message,
+            **({"parse_mode": parse_mode} if parse_mode else {}),
         },
         timeout=15,
     )
+    if response.status_code == 400:
+        data = response.json()
+        if "message is not modified" in data.get("description", "").lower():
+            return data
     response.raise_for_status()
     data = response.json()
     if not data.get("ok"):

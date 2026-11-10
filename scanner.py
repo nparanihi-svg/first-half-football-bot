@@ -7,7 +7,8 @@ from engine import predict
 from signal_rules import watchlist_reason
 from tracking_v3 import record, verify_one
 from early_wins_v53 import notify_early_win
-from results_v4 import deliver_result_notices
+from results_v4 import alert_record, deliver_result_notices
+from win365_alerts import alert_body, alert_text, save_message
 
 MAX_FIXTURES_PER_SCAN = max(1, min(30, int(os.getenv('MAX_FIXTURES_PER_SCAN', '20'))))
 _scan_number = 0
@@ -172,25 +173,27 @@ def scan():
                 if not claim_alert(fixture_id, result['market']):
                     continue
                 from alerts import send_telegram
-                message = (
-                    '⚽ FIRST-HALF WATCHLIST\n'
-                    f'{snapshot.home} vs {snapshot.away}\n'
-                    f"{snapshot.league} | Selected at {minute}'\n"
-                    f'Market: {result["label"]}\n'
-                    f'Estimated chance: {probability * 100:.1f}% (experimental)\n'
-                    f'1H goals: {_fmt(snapshot.half_goals)} | '
-                    f'corners: {_fmt(snapshot.half_corners)}\n'
-                    'Sportsbet: unavailable | bet365: unavailable\n'
-                    'Odds not verified. Research only; not a betting recommendation.'
-                )
+                delivered = False
+
+                def remember_delivery(destination, message_id):
+                    nonlocal delivered
+                    delivered = True
+                    with sqlite3.connect(STATE_DB, timeout=10) as db:
+                        save_message(db, fixture_id, result['market'], destination,
+                                     message_id, body, tally)
+
                 try:
-                    send_telegram(token, chat_id, message)
-                    save_alert_details(
-                        fixture_id, result["market"], minute, probability
-                    )
-                except Exception:
-                    release_alert(fixture_id, result["market"])
-                    raise 
+                    body = alert_body(snapshot, result['label'], probability, fixture.get('goals') or {})
+                    with sqlite3.connect(STATE_DB, timeout=10) as db:
+                        tally = alert_record(db)
+                    send_telegram(token, chat_id, alert_text('🟩 WIN365 · LIVE WATCH', body, tally),
+                                  on_delivery=remember_delivery, parse_mode='HTML')
+                except Exception as exc:
+                    if not delivered:
+                        release_alert(fixture_id, result['market'])
+                    print('Watchlist delivery failed:', type(exc).__name__, flush=True)
+                if delivered:
+                    save_alert_details(fixture_id, result['market'], minute, probability)
             # Live milestone alerts do not change final settlement records.
             notify_early_win(snapshot)
         except Exception as error:
