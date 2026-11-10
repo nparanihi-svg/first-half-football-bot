@@ -1,6 +1,6 @@
 """Explainable, experimental in-play watchlist filters (NOT validated bet advice)."""
 
-def watchlist_reason(snapshot, market):
+def watchlist_reason(snapshot, market, *, require_blocked=True):
     minute = int(snapshot.elapsed)
     if snapshot.status != '1H' or not 8 <= minute <= 38:
         return None
@@ -15,9 +15,9 @@ def watchlist_reason(snapshot, market):
     elif market == 'FH_OVER_2_5_CORNERS':
         if snapshot.half_corners is None or snapshot.half_corners >= 3:
             return None
-        if shots is None or blocked is None:
+        if shots is None:
             return None
-        if snapshot.half_corners >= 1 and shots >= 5 and blocked >= 1:
+        if snapshot.half_corners >= 1 and shots >= 5 and (not require_blocked or (blocked is not None and blocked >= 1)):
             return (f'{snapshot.half_corners} corners, {shots} shots and '
                     f'{blocked} blocked shots by minute {minute}')
     return None

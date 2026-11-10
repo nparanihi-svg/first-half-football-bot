@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from provider import FootballAPI, parse_fixture
 from engine import predict
 from signal_rules import watchlist_reason
+from blocked_shot_audit import CORNERS, record_candidate
 from tracking_v3 import record, verify_one
 from early_wins_v53 import notify_early_win
 from results_v4 import alert_record, deliver_result_notices
@@ -162,6 +163,13 @@ def scan():
                     print('V5 ALERT FILTER:', fixture_id, result['market'], issue, flush=True)
                     continue
                 reason = watchlist_reason(snapshot, result['market'])
+                if result['market'] == CORNERS and (
+                    reason or watchlist_reason(snapshot, CORNERS, require_blocked=False)
+                ):
+                    try:
+                        record_candidate(STATE_DB, snapshot, bool(reason))
+                    except sqlite3.Error as exc:
+                        print('Blocked-shot audit write failed:', type(exc).__name__, flush=True)
                 if reason is None:
                     continue
                 print('RESEARCH WATCHLIST:', result['label'], '-', reason, flush=True)
