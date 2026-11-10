@@ -9,6 +9,7 @@ from tracking_v3 import record, verify_one
 from early_wins_v53 import notify_early_win
 from results_v4 import alert_record, deliver_result_notices
 from win365_alerts import alert_body, alert_text, save_message
+from win365_live_odds import first_half_goals_quote
 
 MAX_FIXTURES_PER_SCAN = max(1, min(30, int(os.getenv('MAX_FIXTURES_PER_SCAN', '20'))))
 _scan_number = 0
@@ -183,7 +184,20 @@ def scan():
                                      message_id, body, tally)
 
                 try:
-                    body = alert_body(snapshot, result['label'], probability, fixture.get('goals') or {})
+                    quote = None
+                    if result['market'] == 'FH_OVER_0_5_GOALS':
+                        try:
+                            rows = api.get('/odds/live', fixture=fixture_id, bet=49)
+                            quote = first_half_goals_quote(rows, fixture_id)
+                        except Exception as exc:
+                            if any(code in str(exc) for code in (
+                                'API_LOCAL_BUDGET_EXHAUSTED', 'API_DAILY_RESERVE_REACHED',
+                                'API_MINUTE_LIMIT_NEAR',
+                            )):
+                                raise
+                            print('Live goals odds unavailable:', type(exc).__name__, flush=True)
+                    body = alert_body(snapshot, result['label'], probability,
+                                      fixture.get('goals') or {}, quote=quote)
                     with sqlite3.connect(STATE_DB, timeout=10) as db:
                         tally = alert_record(db)
                     send_telegram(token, chat_id, alert_text('🟩 WIN365 · LIVE WATCH', body, tally),
@@ -191,6 +205,11 @@ def scan():
                 except Exception as exc:
                     if not delivered:
                         release_alert(fixture_id, result['market'])
+                    if any(code in str(exc) for code in (
+                        'API_LOCAL_BUDGET_EXHAUSTED', 'API_DAILY_RESERVE_REACHED',
+                        'API_MINUTE_LIMIT_NEAR',
+                    )):
+                        raise
                     print('Watchlist delivery failed:', type(exc).__name__, flush=True)
                 if delivered:
                     save_alert_details(fixture_id, result['market'], minute, probability)

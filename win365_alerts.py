@@ -1,19 +1,27 @@
 """Keep the original alert body and Telegram IDs for in-place updates."""
 from html import escape
 
+from win365_daily import PERTH
 
-def alert_body(snapshot, label, probability, goals):
+
+def alert_body(snapshot, label, probability, goals, *, quote=None):
     score = 'unavailable'
     if all(type(goals.get(side)) is int for side in ('home', 'away')):
         score = f'{goals["home"]}–{goals["away"]}'
     corners = snapshot.half_corners
     corner_text = 'Corners unavailable' if corners is None else f'{corners} {"corner" if corners == 1 else "corners"}'
+    odds = 'Odds unverified'
+    if quote is not None:
+        price, updated = quote
+        quote_time = updated.astimezone(PERTH).strftime('%H:%M:%S')
+        odds = f'API-Football live odds {price:f} · Over 0.5 matched · {quote_time} Perth'
+    separator = '\n' if quote is not None else ' · '
     return (
         f'<b>{escape(label)}</b>\n'
         f'{escape(snapshot.home)} vs {escape(snapshot.away)}\n'
         f'{escape(snapshot.league)}\n\n'
         f'<b>{snapshot.elapsed}′</b> · Score {score} · {corner_text}\n'
-        f'Model estimate {probability:.1%} · Odds unverified'
+        f'Model estimate {probability:.1%}{separator}{odds}'
     )
 
 
