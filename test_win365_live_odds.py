@@ -55,3 +55,17 @@ def test_rejects_conflicting_active_prices(live_row):
     values = live_row['odds'][0]['values']
     values.append({**values[0], 'odd': '2.80'})
     assert first_half_goals_quote([live_row], 1509214, NOW) is None
+
+
+def test_corners_require_exact_first_half_line(live_row):
+    from win365_live_odds import first_half_corners_quote
+    live_row['odds'][0]['id'] = 204
+    selection = live_row['odds'][0]['values'][0]
+    selection['handicap'] = '2.5'
+    assert first_half_corners_quote([live_row], 1509214, NOW)[0] == Decimal('2.75')
+    for wrong_line in ('2.0', '3.5'):
+        selection['handicap'] = wrong_line
+        assert first_half_corners_quote([live_row], 1509214, NOW) is None
+    selection['handicap'] = '2.5'
+    selection['suspended'] = True
+    assert first_half_corners_quote([live_row], 1509214, NOW) is None

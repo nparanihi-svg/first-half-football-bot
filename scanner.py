@@ -12,7 +12,8 @@ from tracking_v3 import record, verify_one
 from early_wins_v53 import notify_early_win
 from results_v4 import alert_record, deliver_result_notices
 from win365_alerts import save_message
-from win365_live_odds import first_half_goals_quote
+from win365_live_odds import first_half_goals_quote, first_half_corners_quote
+from win365_performance import record_candidate as record_goal_candidate, record_price
 
 MAX_FIXTURES_PER_SCAN = max(1, min(30, int(os.getenv('MAX_FIXTURES_PER_SCAN', '20'))))
 _scan_number = 0
@@ -176,6 +177,8 @@ def scan():
                         record_candidate(STATE_DB, snapshot, bool(reason))
                     except sqlite3.Error as exc:
                         print('Blocked-shot audit write failed:', type(exc).__name__, flush=True)
+                if reason and result['market'] == 'FH_OVER_0_5_GOALS':
+                    record_goal_candidate(STATE_DB, snapshot, probability)
                 if reason is None:
                     continue
                 print('RESEARCH WATCHLIST:', result['label'], '-', reason, flush=True)
@@ -194,22 +197,25 @@ def scan():
                     nonlocal delivered
                     delivered = True
                     with sqlite3.connect(STATE_DB, timeout=10) as db:
+                        record_price(db, fixture_id, result['market'], minute, probability, quote)
                         save_message(db, fixture_id, result['market'], destination,
                                      message_id, body, tally)
 
                 try:
                     quote = None
-                    if result['market'] == 'FH_OVER_0_5_GOALS':
+                    if result['market'] in ('FH_OVER_0_5_GOALS', CORNERS):
                         try:
-                            rows = api.get('/odds/live', fixture=fixture_id, bet=49)
-                            quote = first_half_goals_quote(rows, fixture_id)
+                            is_goals = result['market'] == 'FH_OVER_0_5_GOALS'
+                            rows = api.get('/odds/live', fixture=fixture_id, bet=49 if is_goals else 204)
+                            reader = first_half_goals_quote if is_goals else first_half_corners_quote
+                            quote = reader(rows, fixture_id)
                         except Exception as exc:
                             if any(code in str(exc) for code in (
                                 'API_LOCAL_BUDGET_EXHAUSTED', 'API_DAILY_RESERVE_REACHED',
                                 'API_MINUTE_LIMIT_NEAR',
                             )):
                                 raise
-                            print('Live goals odds unavailable:', type(exc).__name__, flush=True)
+                            print('Live odds unavailable:', type(exc).__name__, flush=True)
                     body = ticket_body(snapshot, result['label'], probability, fixture, quote)
                     with sqlite3.connect(STATE_DB, timeout=10) as db:
                         tally = alert_record(db)

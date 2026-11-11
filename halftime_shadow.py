@@ -73,6 +73,16 @@ def record_prediction(fixture, snapshot, stats):
             fixture_id INTEGER, checkpoint INTEGER, minute INTEGER, league TEXT,
             payload TEXT, home_ht INTEGER, away_ht INTEGER,
             PRIMARY KEY(fixture_id, checkpoint))''')
+        # A first scan can arrive before team statistics. Upgrade that checkpoint
+        # within its window when stats arrive, preserving settled forecasts.
+        existing = db.execute(
+            'SELECT payload,home_ht FROM halftime_shadow WHERE fixture_id=? AND checkpoint=?',
+            (snapshot.fixture_id, checkpoint)).fetchone()
+        if (existing and existing[1] is None and share is not None
+                and json.loads(existing[0]).get('team_stats') is None):
+            db.execute(
+                'UPDATE halftime_shadow SET minute=?,payload=? WHERE fixture_id=? AND checkpoint=?',
+                (snapshot.elapsed, json.dumps(payload), snapshot.fixture_id, checkpoint))
         db.execute('''INSERT OR IGNORE INTO halftime_shadow VALUES (?, ?, ?, ?, ?, NULL, NULL)''',
                    (snapshot.fixture_id, checkpoint, snapshot.elapsed, snapshot.league, json.dumps(payload)))
 

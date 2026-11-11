@@ -27,7 +27,7 @@ def ticket_body(snapshot, label, probability, fixture, quote):
         'league': snapshot.league, 'country': league.get('country') or '',
         'entry': f'Selected {snapshot.elapsed}′ · {score} · {corner_text}',
         'stats': stats, 'chance': f'Model chance {probability:.1%}',
-        'odds': f'Odds {quote[0]:f}' if quote else 'Odds unverified',
+        'odds': f'Odds {quote[0]:.2f}' if quote else 'Odds unverified',
         'value': f'Line matched · Estimated value {probability * float(quote[0]) - 1:+.1%}' if quote else '',
     })
 
