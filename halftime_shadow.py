@@ -7,6 +7,7 @@ from math import exp
 from pathlib import Path
 
 from provider import _number
+from halftime_history import cached_rates
 
 DB_PATH = os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3')
 CHECKPOINTS = (15, 25, 35)
@@ -68,6 +69,13 @@ def record_prediction(fixture, snapshot, stats):
     mean = 1.15 * (45 - snapshot.elapsed) / 45
     payload = {'baseline': forecast(score, mean, .5),
                'team_stats': forecast(score, mean, share) if share is not None else None}
+    history = cached_rates(fixture)
+    payload['history'] = None
+    if history is not None:
+        home_mean, away_mean, metadata = history
+        remaining = (home_mean + away_mean) * (45 - snapshot.elapsed) / 45
+        payload['history'] = forecast(score, remaining, home_mean / (home_mean + away_mean))
+        payload['history_inputs'] = metadata
     with closing(sqlite3.connect(DB_PATH, timeout=2)) as db, db:
         db.execute('''CREATE TABLE IF NOT EXISTS halftime_shadow (
             fixture_id INTEGER, checkpoint INTEGER, minute INTEGER, league TEXT,
@@ -80,6 +88,13 @@ def record_prediction(fixture, snapshot, stats):
             (snapshot.fixture_id, checkpoint)).fetchone()
         if (existing and existing[1] is None and share is not None
                 and json.loads(existing[0]).get('team_stats') is None):
+            original = json.loads(existing[0])
+            payload['history'] = original.get('history')
+            if 'history_inputs' in original:
+                payload['history_inputs'] = original['history_inputs']
+            # A history forecast at the earlier minute must retain its own
+            # baseline for a comparison at the same time.
+            payload['history_baseline'] = original.get('history_baseline', original['baseline'])
             db.execute(
                 'UPDATE halftime_shadow SET minute=?,payload=? WHERE fixture_id=? AND checkpoint=?',
                 (snapshot.elapsed, json.dumps(payload), snapshot.fixture_id, checkpoint))
@@ -108,22 +123,30 @@ def report(db):
     print(f'Saved forecasts: {len(rows)} | Settled: {sum(h is not None for _, _, h, _ in rows)}')
     for checkpoint in CHECKPOINTS:
         paired = [(json.loads(payload), h, a) for m, payload, h, a in rows if m == checkpoint and h is not None]
-        paired = [(p, h, a) for p, h, a in paired if p['team_stats'] is not None]
-        print(f'Checkpoint {checkpoint}′ | Paired settled forecasts: {len(paired)}')
-        if not paired:
-            continue
-        for model in ('baseline', 'team_stats'):
-            result_hits = score_hits = top_three = brier = 0
-            for payload, home, away in paired:
-                scores = payload[model]['scores']
-                probs = payload[model]['result']
-                actual = outcome(home, away)
-                result_hits += max(probs, key=probs.get) == actual
-                score_hits += scores[0][:2] == [home, away]
-                top_three += any(row[:2] == [home, away] for row in scores)
-                brier += sum((p - (side == actual)) ** 2 for side, p in probs.items())
-            print(f'  {model}: result {result_hits}/{len(paired)} | score top 1 {score_hits}/{len(paired)}'
-                  f' | top 3 {top_three}/{len(paired)} | result Brier {brier / len(paired):.3f}')
+        compare_models(paired, ('baseline', 'team_stats'), checkpoint, 'Team stats')
+        history_pairs = [(dict(p, history_baseline=p.get('history_baseline', p['baseline'])), h, a)
+                         for p, h, a in paired]
+        compare_models(history_pairs, ('history_baseline', 'history'), checkpoint, 'Team history')
+
+
+def compare_models(rows, models, checkpoint, label):
+    paired = [(p, h, a) for p, h, a in rows
+              if all(p.get(model) is not None for model in models)]
+    print(f'{label} checkpoint {checkpoint}′ | Paired settled forecasts: {len(paired)}')
+    if not paired:
+        return
+    for model in models:
+        result_hits = score_hits = top_three = brier = 0
+        for payload, home, away in paired:
+            scores = payload[model]['scores']
+            probs = payload[model]['result']
+            actual = outcome(home, away)
+            result_hits += max(probs, key=probs.get) == actual
+            score_hits += scores[0][:2] == [home, away]
+            top_three += any(row[:2] == [home, away] for row in scores)
+            brier += sum((p - (side == actual)) ** 2 for side, p in probs.items())
+        print(f'  {model}: result {result_hits}/{len(paired)} | score top 1 {score_hits}/{len(paired)}'
+              f' | top 3 {top_three}/{len(paired)} | result Brier {brier / len(paired):.3f}')
 
 
 if __name__ == '__main__':
