@@ -122,9 +122,17 @@ def _record_v58_shadow(fixture, snapshot):
 
 def scan():
     key = os.getenv('API_FOOTBALL_KEY')
-    if not key:
-        raise RuntimeError('API-Football key missing')
-    api = FootballAPI(key)
+    provider = os.getenv('LIVE_DATA_PROVIDER', 'betsapi' if os.getenv('BETSAPI_TOKEN') else 'api-football')
+    if provider.lower() == 'betsapi':
+        from betsapi_provider import BetsAPI
+        token = os.getenv('BETSAPI_TOKEN')
+        if not token:
+            raise RuntimeError('BetsAPI token missing')
+        api = BetsAPI(token, legacy_key=key)
+    else:
+        if not key:
+            raise RuntimeError('API-Football key missing')
+        api = FootballAPI(key)
     try:
         fixtures = api.live()
     except RuntimeError as error:
