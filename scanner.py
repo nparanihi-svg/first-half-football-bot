@@ -6,13 +6,14 @@ from provider import FootballAPI, parse_fixture
 from engine import predict
 from win365_ticket import render_ticket, ticket_body
 import halftime_shadow
+import corner_odds_audit
 from signal_rules import watchlist_reason
 from blocked_shot_audit import CORNERS, record_candidate
 from tracking_v3 import record, verify_one
 from early_wins_v53 import notify_early_win
 from results_v4 import alert_record, deliver_result_notices
 from win365_alerts import save_message
-from win365_live_odds import first_half_goals_quote, first_half_corners_quote
+from win365_live_odds import first_half_goals_quote, corners_quote_diagnostics
 from win365_performance import record_candidate as record_goal_candidate, record_price
 
 MAX_FIXTURES_PER_SCAN = max(1, min(30, int(os.getenv('MAX_FIXTURES_PER_SCAN', '20'))))
@@ -206,9 +207,15 @@ def scan():
                     if result['market'] in ('FH_OVER_0_5_GOALS', CORNERS):
                         try:
                             is_goals = result['market'] == 'FH_OVER_0_5_GOALS'
-                            rows = api.get('/odds/live', fixture=fixture_id, bet=49 if is_goals else 204)
-                            reader = first_half_goals_quote if is_goals else first_half_corners_quote
-                            quote = reader(rows, fixture_id)
+                            rows = api.get('/odds/live', fixture=fixture_id, **({'bet': 49} if is_goals else {}))
+                            if is_goals:
+                                quote = first_half_goals_quote(rows, fixture_id)
+                            else:
+                                quote, diagnostic = corners_quote_diagnostics(rows, fixture_id)
+                                try:
+                                    corner_odds_audit.record(STATE_DB, fixture_id, minute, rows, diagnostic)
+                                except sqlite3.Error as exc:
+                                    print('Corner odds audit write failed:', type(exc).__name__, flush=True)
                         except Exception as exc:
                             if any(code in str(exc) for code in (
                                 'API_LOCAL_BUDGET_EXHAUSTED', 'API_DAILY_RESERVE_REACHED',

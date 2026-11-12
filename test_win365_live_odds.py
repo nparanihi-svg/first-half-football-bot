@@ -69,3 +69,21 @@ def test_corners_require_exact_first_half_line(live_row):
     selection['handicap'] = '2.5'
     selection['suspended'] = True
     assert first_half_corners_quote([live_row], 1509214, NOW) is None
+
+
+def test_corner_diagnostics_explain_rejection_without_substituting_line(live_row):
+    from win365_live_odds import corners_quote_diagnostics
+    assert corners_quote_diagnostics([], 1509214, NOW)[1]['reasons'] == {'empty_response': 1}
+    live_row['odds'][0]['id'] = 204
+    value = live_row['odds'][0]['values'][0]
+    value['handicap'] = '3.5'
+    quote, diagnostic = corners_quote_diagnostics([live_row], 1509214, NOW)
+    assert quote is None
+    assert diagnostic['reasons'] == {'different_line': 1}
+    value['handicap'] = '2.5'
+    quote, diagnostic = corners_quote_diagnostics([live_row], 1509214, NOW)
+    assert quote[0] == Decimal('2.75')
+    assert diagnostic['outcome'] == 'accepted'
+    quote, diagnostic = corners_quote_diagnostics([live_row], 1509214, NOW + timedelta(seconds=90))
+    assert quote is None
+    assert 'stale_or_future_update' in diagnostic['reasons']
