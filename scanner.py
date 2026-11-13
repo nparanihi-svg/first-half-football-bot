@@ -7,6 +7,7 @@ from provider import FootballAPI, parse_fixture
 from engine import predict
 from win365_ticket import render_ticket, ticket_body
 import halftime_shadow
+import halftime_alerts
 import corner_odds_audit
 from alert_policy import selection_shots, quote_issue, record_decision, informational_quote
 from signal_rules import watchlist_reason
@@ -166,6 +167,7 @@ def scan():
             snapshot = parse_fixture(fixture, stats)
             try:
                 halftime_shadow.record_prediction(fixture, snapshot, stats, api=api)
+                halftime_alerts.send_entry(fixture, snapshot)
             except Exception as exc:
                 print('Halftime shadow record failed:', type(exc).__name__, flush=True)
             _record_v58_shadow(fixture, snapshot)
@@ -280,6 +282,10 @@ def scan():
         halftime_shadow.settle_predictions(fixtures)
     except Exception as exc:
         print('Halftime shadow settlement failed:', type(exc).__name__, flush=True)
+    try:
+        halftime_alerts.settle_and_update(api, fixtures)
+    except Exception as exc:
+        print('HT H2H result check deferred:', type(exc).__name__, flush=True)
     print('First-half matches checked:', checked, flush=True)
     try:
         verify_one(api, fixtures)
