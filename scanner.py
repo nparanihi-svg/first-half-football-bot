@@ -168,6 +168,7 @@ def scan():
             try:
                 halftime_shadow.record_prediction(fixture, snapshot, stats, api=api)
                 halftime_alerts.send_entry(fixture, snapshot)
+                halftime_alerts.send_entry(fixture, snapshot, kind='score')
             except Exception as exc:
                 print('Halftime shadow record failed:', type(exc).__name__, flush=True)
             _record_v58_shadow(fixture, snapshot)
@@ -284,6 +285,7 @@ def scan():
         print('Halftime shadow settlement failed:', type(exc).__name__, flush=True)
     try:
         halftime_alerts.settle_and_update(api, fixtures)
+        halftime_alerts.settle_and_update(api, fixtures, kind='score')
     except Exception as exc:
         print('HT H2H result check deferred:', type(exc).__name__, flush=True)
     print('First-half matches checked:', checked, flush=True)
