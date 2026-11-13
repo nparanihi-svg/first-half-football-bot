@@ -165,7 +165,7 @@ def scan():
             print("WIN365 RAW STATS:", fixture_id, repr(stats)[:1500], flush=True)
             snapshot = parse_fixture(fixture, stats)
             try:
-                halftime_shadow.record_prediction(fixture, snapshot, stats)
+                halftime_shadow.record_prediction(fixture, snapshot, stats, api=api)
             except Exception as exc:
                 print('Halftime shadow record failed:', type(exc).__name__, flush=True)
             _record_v58_shadow(fixture, snapshot)

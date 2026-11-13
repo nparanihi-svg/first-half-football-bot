@@ -60,10 +60,29 @@ def target_share(fixture, stats):
     return min(.70, max(.30, share))
 
 
-def record_prediction(fixture, snapshot, stats):
+def record_prediction(fixture, snapshot, stats, api=None):
     checkpoint = next((m for m in CHECKPOINTS if m <= snapshot.elapsed < m + 5), None)
     score = score_pair(fixture.get('goals') or {})
+    if getattr(snapshot, 'status', '1H') != '1H':
+        return
+    from halftime_features import observe, adjusted_rates
+    with closing(sqlite3.connect(DB_PATH, timeout=2)) as db, db:
+        context = observe(db, fixture, snapshot.elapsed, stats)
+        exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='halftime_shadow'").fetchone()
+        existing = (db.execute('SELECT payload,home_ht FROM halftime_shadow WHERE fixture_id=? AND checkpoint=?',
+                              (snapshot.fixture_id, checkpoint)).fetchone() if exists else None)
+    history_status = 'unavailable'
+    # Warm before checkpoint entry so the two-request-per-scan budget can
+    # rotate through concurrent games without rewriting saved forecasts.
+    if api is not None and snapshot.fixture_id < 0 and 8 <= snapshot.elapsed < 40:
+        try:
+            api.prepare_halftime_shadow(fixture)
+            history_status = 'cache checked'
+        except Exception as exc:
+            history_status = 'history unavailable: ' + type(exc).__name__
     if checkpoint is None or score is None:
+        return
+    if existing and (existing[1] is not None or json.loads(existing[0]).get('team_stats') is not None):
         return
     share = target_share(fixture, stats)
     mean = 1.15 * (45 - snapshot.elapsed) / 45
@@ -76,6 +95,19 @@ def record_prediction(fixture, snapshot, stats):
         remaining = (home_mean + away_mean) * (45 - snapshot.elapsed) / 45
         payload['history'] = forecast(score, remaining, home_mean / (home_mean + away_mean))
         payload['history_inputs'] = metadata
+    payload['entry_score'] = list(score)
+    payload['features'] = context
+    payload['history_status'] = 'available' if history is not None else history_status
+    enhanced_mean, enhanced_share, used = adjusted_rates(score, snapshot.elapsed, history, context)
+    payload['enhanced'] = forecast(score, enhanced_mean, enhanced_share)
+    payload['enhanced_version'] = 1
+    payload['enhanced_inputs'] = used + (['team_history'] if history else [])
+    payload['odds'] = None
+    if api is not None and snapshot.fixture_id < 0:
+        try:
+            payload['odds'] = api.halftime_quotes(fixture)
+        except Exception as exc:
+            payload['odds_status'] = 'unavailable: ' + type(exc).__name__
     with closing(sqlite3.connect(DB_PATH, timeout=2)) as db, db:
         db.execute('''CREATE TABLE IF NOT EXISTS halftime_shadow (
             fixture_id INTEGER, checkpoint INTEGER, minute INTEGER, league TEXT,
@@ -127,6 +159,38 @@ def report(db):
         history_pairs = [(dict(p, history_baseline=p.get('history_baseline', p['baseline'])), h, a)
                          for p, h, a in paired]
         compare_models(history_pairs, ('history_baseline', 'history'), checkpoint, 'Team history')
+        compare_models(paired, ('baseline', 'enhanced'), checkpoint, 'Enhanced experimental')
+    score_state_report(rows)
+
+
+def score_state_report(rows):
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for cp,payload,h,a in rows:
+        p=json.loads(payload)
+        if cp==25 and h is not None and p.get('entry_score') is not None:
+            groups[tuple(p['entry_score'])].append((p,h,a))
+    for score,items in sorted(groups.items()):
+        unchanged=sum(outcome(*score)==outcome(h,a) for p,h,a in items)
+        exact=sum(score==(h,a) for p,h,a in items)
+        print(f'25-minute entry score {score[0]}-{score[1]} | n={len(items)} | unchanged result {unchanged} | unchanged score {exact}')
+        for model in ('baseline','team_stats','enhanced'):
+            entries=[(p,h,a) for p,h,a in items if p.get(model)]
+            hits=sum(max(p[model]['result'],key=p[model]['result'].get)==outcome(h,a) for p,h,a in entries)
+            priced=[]
+            for p,h,a in entries:
+                pick=max(p[model]['result'],key=p[model]['result'].get)
+                price=((p.get('odds') or {}).get('result') or {}).get(pick)
+                if price is not None:priced.append(price-1 if pick==outcome(h,a) else -1)
+            score_priced=[]
+            for p,h,a in entries:
+                sh,sa,_=p[model]['scores'][0]
+                price=((p.get('odds') or {}).get('scores') or {}).get(f'{sh}-{sa}')
+                if price is not None:score_priced.append(price-1 if (sh,sa)==(h,a) else -1)
+            rp=f'{sum(priced):+.2f}u' if priced else 'unavailable'
+            sp=f'{sum(score_priced):+.2f}u' if score_priced else 'unavailable'
+            print(f'  {model}: result {hits}/{len(entries)} | H2H priced {len(priced)} | H2H priced-only profit {rp} | correct-score priced {len(score_priced)} | correct-score priced-only profit {sp}')
+    print('Shadow only; missing odds are not imputed. Forecasts from the same game are correlated.')
 
 
 def compare_models(rows, models, checkpoint, label):

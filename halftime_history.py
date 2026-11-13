@@ -54,6 +54,9 @@ def team_rates(fixtures, team_id, venue, kickoff, current_id):
 
 
 def cached_rates(fixture):
+    if (fixture.get('fixture') or {}).get('id', 0) < 0:
+        from betsapi_history import cached
+        return cached(fixture, os.getenv('SIGNAL_DB_PATH', '/var/data/first_half_v3.sqlite3'))
     kickoff = _date((fixture.get('fixture') or {}).get('date'))
     if kickoff is None:
         return None

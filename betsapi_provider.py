@@ -73,6 +73,7 @@ def statistics(fixture):
     first_half = fixture['fixture']['status']['short'] == '1H'
     fields = {'on_target': 'Shots on Goal', 'off_target': 'Shots off Goal',
               'shots_blocked': 'Blocked Shots', 'possession_rt': 'Ball Possession',
+              'redcards': 'Red Cards',
               'goalattempts': 'Total Shots'}
     # Full-match corners after halftime cannot settle first-half selections.
     fields['corners' if first_half else 'corner_h'] = 'Corner Kicks'
@@ -253,6 +254,14 @@ class BetsAPI:
             return self.legacy.first_half_stats(fid, fresh=fresh)
         f = self.fixture(fid, fresh=fresh)
         return statistics(f) if f else []
+
+    def prepare_halftime_shadow(self, fixture):
+        from betsapi_history import prepare
+        prepare(self, fixture)
+
+    def halftime_quotes(self, fixture):
+        from halftime_odds import parse
+        return parse(self.request('/v1/bet365/event', FI=-fixture['fixture']['id']), fixture)
 
     def request_summary(self):
         return {'provider': 'BetsAPI', **dict(self.counts)}
