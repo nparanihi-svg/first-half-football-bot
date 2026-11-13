@@ -1,6 +1,7 @@
 """Render a WIN365 ticket from immutable entry data and the current outcome."""
 import io
 import json
+from alert_policy import selection_shots
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -18,7 +19,8 @@ def ticket_body(snapshot, label, probability, fixture, quote):
     corners = snapshot.half_corners
     corner_text = ('Corners unavailable' if corners is None
                    else f'{corners} {"corner" if corners == 1 else "corners"}')
-    stats = f'{snapshot.total_shots:g} shots · {snapshot.shots_on_goal:g} on target'
+    shot_prefix = 'At least ' if snapshot.total_shots is None else ''
+    stats = f'{shot_prefix}{selection_shots(snapshot):g} shots · {snapshot.shots_on_goal:g} on target'
     if snapshot.blocked_shots is not None and 'Corners' in label:
         stats += f' · {snapshot.blocked_shots:g} blocked'
     league = fixture.get('league') or {}

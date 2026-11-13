@@ -1,17 +1,19 @@
 """Explainable, experimental in-play watchlist filters (NOT validated bet advice)."""
 
+from alert_policy import selection_shots
+
 def watchlist_reason(snapshot, market, *, require_blocked=True):
     minute = int(snapshot.elapsed)
     if snapshot.status != '1H' or not 8 <= minute <= 38:
         return None
-    shots = snapshot.total_shots
+    shots = selection_shots(snapshot)
     on_target = snapshot.shots_on_goal
     blocked = snapshot.blocked_shots
     if market == 'FH_OVER_0_5_GOALS':
         if snapshot.half_goals != 0 or shots is None or on_target is None:
             return None
         if shots >= 5 and on_target >= 2:
-            return f'{shots} total shots and {on_target} shots on target by minute {minute}'
+            return f'at least {shots} shots and {on_target} shots on target by minute {minute}'
     elif market == 'FH_OVER_2_5_CORNERS':
         if snapshot.half_corners is None or snapshot.half_corners >= 3:
             return None

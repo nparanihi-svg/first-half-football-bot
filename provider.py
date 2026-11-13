@@ -141,4 +141,5 @@ def parse_fixture(fixture, stats=None, goal_rate=1.15, corner_rate=4.5):
         half_corners=corners, shots_on_goal=totals.get('Shots on Goal'),
         blocked_shots=totals.get('Blocked Shots'), total_shots=totals.get('Total Shots'),
         pre_goal_rate=goal_rate, pre_corner_rate=corner_rate,
-        kickoff=f.get('date', ''), possession_home=home_pos, possession_away=away_pos)
+        kickoff=f.get('date', ''), possession_home=home_pos, possession_away=away_pos,
+        shots_lower_bound=totals.get('Shots Lower Bound'))

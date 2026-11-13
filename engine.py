@@ -22,6 +22,7 @@ class Snapshot:
     data_age_seconds: float = 0
     possession_home: float | None = None
     possession_away: float | None = None
+    shots_lower_bound: float | None = None
 
 
 def poisson_tail(mean: float, at_least: int) -> float:

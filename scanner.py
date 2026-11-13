@@ -7,6 +7,7 @@ from engine import predict
 from win365_ticket import render_ticket, ticket_body
 import halftime_shadow
 import corner_odds_audit
+from alert_policy import selection_shots, quote_issue, record_decision
 from signal_rules import watchlist_reason
 from blocked_shot_audit import CORNERS, record_candidate
 from tracking_v3 import record, verify_one
@@ -34,11 +35,12 @@ def eligible_fixtures(fixtures):
             for i in range(min(MAX_FIXTURES_PER_SCAN, len(eligible)))]
 
 def signal_data_issue(snapshot, market):
-    if snapshot.total_shots is None or snapshot.shots_on_goal is None:
+    shots = selection_shots(snapshot)
+    if shots is None or snapshot.shots_on_goal is None:
         return 'missing live shots / shots on target'
-    if snapshot.total_shots < 0 or snapshot.shots_on_goal < 0:
+    if shots < 0 or snapshot.shots_on_goal < 0:
         return 'invalid negative shot counts'
-    if snapshot.shots_on_goal > snapshot.total_shots:
+    if snapshot.shots_on_goal > shots:
         return 'shots on target exceed total shots'
     if market == 'FH_OVER_2_5_CORNERS':
         if snapshot.half_corners is None:
@@ -88,7 +90,7 @@ def _explanation(snapshot, result):
     return (
         f'Time left (regulation): {result["minutes_remaining"]:.0f} min + possible stoppage\n'
         f'Goals this half: {snapshot.half_goals}; corners: {_fmt(snapshot.half_corners)}\n'
-        f'Shots: {_fmt(snapshot.total_shots)}; on target: {_fmt(snapshot.shots_on_goal)}; '
+        f'Shots: {_fmt(snapshot.total_shots)}; minimum known: {_fmt(getattr(snapshot, "shots_lower_bound", None))}; on target: {_fmt(snapshot.shots_on_goal)}; '
         f'blocked: {_fmt(snapshot.blocked_shots)}\n'
         f'Possession (team order as listed): {_fmt(snapshot.possession_home, "%")} / '
         f'{_fmt(snapshot.possession_away, "%")}\n'
@@ -176,6 +178,8 @@ def scan():
                 print('MODEL EXPLANATION:', _explanation(snapshot, result).replace('\n', ' | '), flush=True)
                 issue = signal_data_issue(snapshot, result['market'])
                 if issue:
+                    with sqlite3.connect(STATE_DB, timeout=10) as db:
+                        record_decision(db, snapshot, result, stats, issue)
                     print('V5 ALERT FILTER:', fixture_id, result['market'], issue, flush=True)
                     continue
                 reason = watchlist_reason(snapshot, result['market'])
@@ -188,6 +192,9 @@ def scan():
                         print('Blocked-shot audit write failed:', type(exc).__name__, flush=True)
                 if reason and result['market'] == 'FH_OVER_0_5_GOALS':
                     record_goal_candidate(STATE_DB, snapshot, probability)
+                with sqlite3.connect(STATE_DB, timeout=10) as db:
+                    record_decision(db, snapshot, result, stats,
+                                    'stats rules passed' if reason else 'timing or selection threshold failed')
                 if reason is None:
                     continue
                 print('RESEARCH WATCHLIST:', result['label'], '-', reason, flush=True)
@@ -206,6 +213,7 @@ def scan():
                     nonlocal delivered
                     delivered = True
                     with sqlite3.connect(STATE_DB, timeout=10) as db:
+                        record_decision(db, snapshot, result, stats, 'delivered', quote, delivered=True)
                         record_price(db, fixture_id, result['market'], minute, probability, quote)
                         save_message(db, fixture_id, result['market'], destination,
                                      message_id, body, tally)
@@ -231,6 +239,13 @@ def scan():
                             )):
                                 raise
                             print('Live odds unavailable:', type(exc).__name__, flush=True)
+                    rejection = quote_issue(probability, quote)
+                    with sqlite3.connect(STATE_DB, timeout=10) as db:
+                        record_decision(db, snapshot, result, stats, rejection or 'price gates passed', quote)
+                    if rejection:
+                        release_alert(fixture_id, result['market'])
+                        print('PRICE ALERT FILTER:', fixture_id, result['market'], rejection, flush=True)
+                        continue
                     body = ticket_body(snapshot, result['label'], probability, fixture, quote)
                     with sqlite3.connect(STATE_DB, timeout=10) as db:
                         tally = alert_record(db)

@@ -91,6 +91,16 @@ def statistics(fixture):
             parts = ('Shots on Goal', 'Shots off Goal', 'Blocked Shots')
             if all(k in stat_map for k in parts):
                 values.append({'type': 'Total Shots', 'value': sum(stat_map[k] for k in parts)})
+        # A minimum count is sufficient for an 'at least five shots' gate.
+        # Keep it separate from total shots; unknown blocked shots are never zero.
+        if first_half:
+            current = {v['type']: v['value'] for v in values}
+            parts = ('Shots on Goal', 'Shots off Goal')
+            if 'Total Shots' in current:
+                values.append({'type': 'Shots Lower Bound', 'value': current['Total Shots']})
+            elif all(k in stat_map for k in parts):
+                values.append({'type': 'Shots Lower Bound',
+                               'value': sum(stat_map[k] for k in parts)})
         output.append({'team': fixture['teams'][side], 'statistics': values})
     # Existing parser sums available values. Avoid treating a missing team's
     # stat as zero by dropping that field from both teams.
