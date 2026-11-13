@@ -23,7 +23,8 @@ def test_lower_bound_qualifies_without_inventing_total_or_blocked():
     assert s.shots_lower_bound == 7
     assert scanner.signal_data_issue(s, 'FH_OVER_0_5_GOALS') is None
     assert watchlist_reason(s, 'FH_OVER_0_5_GOALS')
-    assert watchlist_reason(s, 'FH_OVER_2_5_CORNERS') is None
+    assert watchlist_reason(s, 'FH_OVER_2_5_CORNERS', require_blocked=True) is None
+    assert watchlist_reason(s, 'FH_OVER_2_5_CORNERS')
     assert watchlist_reason(s, 'FH_OVER_2_5_CORNERS', require_blocked=False)
     body = ticket_body(s, '1H Over 0.5 Goals', .65, f, None)
     assert 'At least 7 shots' in body
@@ -33,11 +34,11 @@ def test_lower_bound_qualifies_without_inventing_total_or_blocked():
     assert scanner.signal_data_issue(s, 'FH_OVER_0_5_GOALS')
 
 
-@pytest.mark.parametrize('price,p,allowed', [(1.5,.70,True),(2,.60,True),(1.49,.9,False),
-    (2.01,.9,True),(1.5,.5,False),(2,.5,False),(float('nan'),.8,False)])
+@pytest.mark.parametrize('price,p,allowed', [(1.5,.70,True),(2,.60,True),(1.49,.9,True),
+    (2.01,.9,True),(1.5,.5,True),(2,.5,True),(float('nan'),.8,True)])
 def test_price_and_value_boundaries(price,p,allowed):
     assert (quote_issue(p,(price,datetime.now(timezone.utc))) is None) == allowed
-    assert quote_issue(p,None)
+    assert quote_issue(p,None) is None
 
 
 def test_multiple_scans_same_minute_and_immutable_entry():
@@ -54,8 +55,8 @@ def test_multiple_scans_same_minute_and_immutable_entry():
     assert entry['snapshot']['total_shots'] == 10
 
 
-@pytest.mark.parametrize('price,expected', [(None,False),(Decimal('4.10'),True),
-    (Decimal('1.45'),False),(Decimal('1.75'),True)])
+@pytest.mark.parametrize('price,expected', [(None,True),(Decimal('4.10'),True),
+    (Decimal('1.45'),True),(Decimal('1.75'),True)])
 def test_scanner_enforces_gates_before_telegram(monkeypatch,tmp_path,price,expected):
     import alerts
     import shadow_v55
@@ -95,3 +96,47 @@ def test_partial_team_blocked_field_keeps_minimum_count():
     assert s.total_shots is None
     assert s.shots_lower_bound == 8
     assert s.blocked_shots is None
+
+
+def test_inconsistent_aggregate_falls_back_to_components():
+    e=event();e['stats']['goalattempts']=['1','1']
+    f=normalize(e,'99');raw=statistics(f);s=parse_fixture(f,raw)
+    assert s.total_shots==8 and s.shots_on_goal==3
+    assert raw[0]['source_statistics']['goalattempts']=='1'
+    del e['stats']['shots_blocked']
+    f=normalize(e,'99');s=parse_fixture(f,statistics(f))
+    assert s.total_shots is None and s.shots_lower_bound==7
+
+
+def test_optional_blocked_does_not_invent_zero():
+    e=event();del e['stats']['shots_blocked']
+    f=normalize(e,'99');s=parse_fixture(f,statistics(f))
+    assert watchlist_reason(s,'FH_OVER_2_5_CORNERS')
+    assert not watchlist_reason(s,'FH_OVER_2_5_CORNERS',require_blocked=True)
+    assert s.blocked_shots is None
+
+
+def test_invalid_informational_prices_are_not_displayed():
+    from alert_policy import informational_quote
+    for price in (float('nan'),float('inf'),0,1,'bad'):
+        assert informational_quote((price,None)) is None
+    assert informational_quote((1.2,None)) == (1.2,None)
+
+
+def test_threshold_report_does_not_use_later_price(capsys):
+    from shot_threshold_report import report
+    d=sqlite3.connect(':memory:')
+    d.execute('CREATE TABLE observations (fixture_id,market,result)')
+    d.execute("INSERT INTO observations VALUES (-99,'FH_OVER_0_5_GOALS','WIN')")
+    s=parse_fixture(normalize(event(),'99'),statistics(normalize(event(),'99')))
+    s.total_shots=3;s.shots_on_goal=2
+    record_decision(d,s,{'market':'FH_OVER_0_5_GOALS','_scan_id':'early'},[], 'stats')
+    s.total_shots=5
+    record_decision(d,s,{'market':'FH_OVER_0_5_GOALS','_scan_id':'later'},[], 'stats')
+    record_decision(d,s,{'market':'FH_OVER_0_5_GOALS','_scan_id':'later'},[], 'price', (1.8,datetime.now(timezone.utc)))
+    report(d)
+    text=capsys.readouterr().out
+    three=next(l for l in text.splitlines() if 'GOALS 3 shots' in l)
+    five=next(l for l in text.splitlines() if 'GOALS 5 shots' in l)
+    assert 'priced settled 0' in three and 'missing prices 1' in three
+    assert 'priced settled 1' in five and '+0.80u' in five

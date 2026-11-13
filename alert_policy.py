@@ -9,16 +9,23 @@ def selection_shots(snapshot):
     return total if total is not None else getattr(snapshot, 'shots_lower_bound', None)
 
 
-def quote_issue(probability, quote):
+def informational_quote(quote):
     if quote is None:
-        return 'verified exact-line odds unavailable'
-    price = float(quote[0])
-    if not math.isfinite(price) or price < 1.50:
-        return 'odds below 1.50 or invalid'
+        return None
+    try:
+        price = float(quote[0])
+        if not math.isfinite(price) or price <= 1:
+            return None
+        return quote
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+
+def quote_issue(probability, quote):
+    # Prices are informative, never an alert gate. The model is experimental;
+    # an unavailable price cannot support a minimum-odds or value claim.
     if not math.isfinite(probability) or not 0 <= probability <= 1:
         return 'invalid model estimate'
-    if probability * price <= 1:
-        return 'no positive model-estimated value'
     return None
 
 

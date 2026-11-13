@@ -1,13 +1,14 @@
 """Live first-half research scanner with explainable, uncalibrated signals."""
 import os
 import sqlite3
+from uuid import uuid4
 from datetime import datetime, timezone
 from provider import FootballAPI, parse_fixture
 from engine import predict
 from win365_ticket import render_ticket, ticket_body
 import halftime_shadow
 import corner_odds_audit
-from alert_policy import selection_shots, quote_issue, record_decision
+from alert_policy import selection_shots, quote_issue, record_decision, informational_quote
 from signal_rules import watchlist_reason
 from blocked_shot_audit import CORNERS, record_candidate
 from tracking_v3 import record, verify_one
@@ -169,6 +170,7 @@ def scan():
                 print('Halftime shadow record failed:', type(exc).__name__, flush=True)
             _record_v58_shadow(fixture, snapshot)
             for result in predict(snapshot):
+                result['_scan_id'] = uuid4().hex
                 record(snapshot, result)
                 __import__('shadow_v55').record_shadow(fixture, result)
                 probability = result['probability']
@@ -187,7 +189,8 @@ def scan():
                     reason or watchlist_reason(snapshot, CORNERS, require_blocked=False)
                 ):
                     try:
-                        record_candidate(STATE_DB, snapshot, bool(reason))
+                        record_candidate(STATE_DB, snapshot, bool(
+                            watchlist_reason(snapshot, CORNERS, require_blocked=True)))
                     except sqlite3.Error as exc:
                         print('Blocked-shot audit write failed:', type(exc).__name__, flush=True)
                 if reason and result['market'] == 'FH_OVER_0_5_GOALS':
@@ -239,6 +242,7 @@ def scan():
                             )):
                                 raise
                             print('Live odds unavailable:', type(exc).__name__, flush=True)
+                    quote = informational_quote(quote)
                     rejection = quote_issue(probability, quote)
                     with sqlite3.connect(STATE_DB, timeout=10) as db:
                         record_decision(db, snapshot, result, stats, rejection or 'price gates passed', quote)

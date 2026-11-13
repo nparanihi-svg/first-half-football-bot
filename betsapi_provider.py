@@ -87,6 +87,13 @@ def statistics(fixture):
             if value is not None and (first_half or label == 'Corner Kicks'):
                 values.append({'type': label, 'value': value})
         stat_map = {v['type']: v['value'] for v in values}
+        # Reject an aggregate that contradicts its component counts. The feed
+        # can report goalattempts=1 alongside multiple shots on/off target.
+        components = ('Shots on Goal', 'Shots off Goal')
+        if ('Total Shots' in stat_map and all(k in stat_map for k in components)
+                and stat_map['Total Shots'] < sum(stat_map[k] for k in components)):
+            values = [v for v in values if v['type'] != 'Total Shots']
+            stat_map.pop('Total Shots')
         if first_half and 'Total Shots' not in stat_map:
             parts = ('Shots on Goal', 'Shots off Goal', 'Blocked Shots')
             if all(k in stat_map for k in parts):
@@ -101,7 +108,9 @@ def statistics(fixture):
             elif all(k in stat_map for k in parts):
                 values.append({'type': 'Shots Lower Bound',
                                'value': sum(stat_map[k] for k in parts)})
-        output.append({'team': fixture['teams'][side], 'statistics': values})
+        output.append({'team': fixture['teams'][side], 'statistics': values,
+                       'source_statistics': {key: pair[index] for key, pair in raw.items()
+                           if isinstance(pair, list) and len(pair) == 2}})
     # Existing parser sums available values. Avoid treating a missing team's
     # stat as zero by dropping that field from both teams.
     shared = set(v['type'] for v in output[0]['statistics']) & set(

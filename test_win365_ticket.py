@@ -15,7 +15,7 @@ def test_ticket_waits_for_settlement_and_edits_original_photo():
                                home='Galatasaray', away='Fenerbahçe', elapsed=22)
     fixture = {'league': {'country': 'Turkey'}, 'goals': {'home': 0, 'away': 0}}
     body = ticket_body(snapshot, '1H Asian Corners Over 2.5', .674, fixture, None)
-    assert '2 blocked' in body and 'Odds unverified' in body
+    assert '2 blocked' in body and 'Odds unavailable' in body
     assert Image.open(io.BytesIO(render_ticket(body, 'Today 3 W / 1 L'))).size == (880, 920)
     with sqlite3.connect(':memory:') as db, patch('alerts.ticket_photo') as photo:
         save_message(db, 1, 'corners', '123', 45, body, 'Today 3 W / 1 L')
